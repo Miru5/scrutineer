@@ -169,7 +169,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test PostgreSQL
-        run: go test -race -count=1 -run '^TestPostgres' ./cmd/scrutineer ./internal/db ./internal/queue ./internal/web ./internal/worker
+        run: go test -race -count=1 -run '^TestPostgres' ./cmd/scrutineer ./internal/db ./internal/queue ./internal/web ./internal/worker ./scripts/migrate-sqlite-to-postgres
 
   lint:
     name: lint
