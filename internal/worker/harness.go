@@ -26,7 +26,7 @@ func HarnessNames() string                       { return harness.Names() }
 // DefaultModelsFor mirrors. The runner version-pin check requires this to
 // match both CODEX_*_LOCK tags, turning a future CLI catalog change into a
 // reviewable CI failure instead of silently seeding removed model ids.
-const CodexModelCatalogRelease = "rust-v0.154.0"
+const CodexModelCatalogRelease = "rust-v0.155.1"
 
 // DefaultModelsFor returns the model list Scrutineer exposes for a harness.
 // Harness v0.1.14 predates Codex's 5.6/Astra catalog and still defaults to the
@@ -40,7 +40,6 @@ func DefaultModelsFor(h Harness) []ModelDefault {
 			{Name: "GPT-5.6 Luna", ID: "gpt-5.6-luna", Tier: "mid"},
 			{Name: "GPT-6 Astra", ID: modelGPT6AstraID, Tier: "max"},
 			{Name: "GPT-5.5", ID: "gpt-5.5"},
-			{Name: "GPT-5.2", ID: "gpt-5.2"},
 		}
 	}
 	return h.DefaultModels()
