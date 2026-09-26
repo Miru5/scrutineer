@@ -34,8 +34,6 @@ or in `scrutineer.yaml`:
         tier: max
       - name: GPT-5.5
         id:   gpt-5.5
-      - name: GPT-5.2
-        id:   gpt-5.2
       - name: Daybreak Blue
         id:   gpt-daybreak-blue-latest
 

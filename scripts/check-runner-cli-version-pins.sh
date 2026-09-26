@@ -94,7 +94,12 @@ require_pair() {
 }
 
 require_pair 'Codex' "$codex_amd64" "$codex_arm64"
-require_pair 'Codex runner and model catalog' "$codex_amd64" "$codex_catalog"
+if [ "$codex_amd64" != "$codex_catalog" ]; then
+  printf 'Codex runner and model catalog version pins disagree:\n  runner: %s\n  model catalog: %s\n' \
+    "$codex_amd64" "$codex_catalog" >&2
+  exit 1
+fi
+printf 'Codex runner and model catalog version pins agree: %s\n' "$codex_catalog"
 require_pair 'OpenCode' "$opencode_amd64" "$opencode_arm64"
 require_pair 'Copilot' "$copilot_amd64" "$copilot_arm64"
 require_pair 'Betterleaks container images' "$betterleaks_main" "$betterleaks_runner"
