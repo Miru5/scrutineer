@@ -87,7 +87,7 @@ func TestCancel_carriesTheReasonOntoARunningScan(t *testing.T) {
 	go func() { done <- w.wrap(w.doSkill)(context.Background(), body) }()
 
 	<-runner.started
-	if !w.Cancel(scan.ID, OptOutCancelReason) {
+	if found, err := w.CancelWithAudit(scan.ID, OptOutCancelReason, nil); !found || err != nil {
 		t.Fatal("Cancel reported the scan not running")
 	}
 	select {
