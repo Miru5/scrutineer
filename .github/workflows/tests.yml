@@ -244,7 +244,7 @@ jobs:
   conclusion:
     name: conclusion
     needs: [release-logic, tests, lint, vuln, zizmor]
-    if: always()
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-slim
     timeout-minutes: 15
     permissions: {}
