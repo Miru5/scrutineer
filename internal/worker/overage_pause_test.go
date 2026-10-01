@@ -35,12 +35,16 @@ func TestOveragePauseConcurrentScans(t *testing.T) {
 	results := make(chan error, 2)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
-	handler := func(ctx context.Context, scan *db.Scan, emit func(Event)) (string, error) {
+	handler := func(scanCtx context.Context, scan *db.Scan, emit func(Event)) (string, error) {
 		emit(Event{Kind: KindSession, SessionID: "keep-session"})
 		if err := os.MkdirAll(w.scanWorkRoot(scan), 0o755); err != nil {
 			return "", err
 		}
 		started <- struct{}{}
+		// Wait on the test's own context, not the scan's: the first scan's
+		// overage event cancels every running scan, so a second scan that
+		// reaches this point late would otherwise race release against its
+		// own cancellation and return no report.
 		select {
 		case <-release:
 		case <-ctx.Done():
@@ -49,8 +53,8 @@ func TestOveragePauseConcurrentScans(t *testing.T) {
 		if scan.ID == scans[0].ID {
 			emit(Event{Kind: KindRateLimit, RateLimit: &RateLimitInfo{Type: "five_hour", Status: "allowed", IsUsingOverage: true, ResetsAt: reset.Unix()}})
 		}
-		<-ctx.Done()
-		return "partial report", ctx.Err()
+		<-scanCtx.Done()
+		return "partial report", scanCtx.Err()
 	}
 	for _, scan := range scans[:2] {
 		payload, err := json.Marshal(queue.Payload{ScanID: scan.ID})
