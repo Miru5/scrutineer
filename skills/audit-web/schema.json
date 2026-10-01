@@ -1,5 +1,5 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "audit-package-manager report",
+  "title": "audit-web report",
   "$ref": "../_shared/audit-mode-report.schema.json"
 }

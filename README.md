@@ -187,6 +187,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `audit-pii` | Opt-in static audit for real personal or customer-identifying data committed to source or exposed through logs, URLs, telemetry, exports, and responses |
 | `audit-memory` | Opt-in static audit for reachable memory corruption in first-party C, C++, unsafe Rust, native extensions, and FFI boundaries |
 | `audit-package-manager` | Static audit of package manager clients, registries, and proxies against a bundled threat model; triage enqueues it when source evidence shows the repository implements one |
+| `audit-web` | Reviews web sessions, browser origins, uploads and business workflows when triage finds an implemented web application or API |
 
 Edit `skills/triage/SKILL.md` to change what gets run by default. Drop new skill directories in `skills/` to add scan types; no code changes needed. See [docs/skills.md](docs/skills.md) for the frontmatter reference, the `scrutineer.*` metadata keys, the `context.json` shape, output kinds, schema validation, and the skill-facing HTTP API.
 

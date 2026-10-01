@@ -30,6 +30,7 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `audit-pii` | Focused static audit for real personal or customer-identifying data committed to source or exposed through logs, URLs, telemetry, exports, and responses. Distinguishes concrete exposure from synthetic examples, reserved addresses, and public author metadata; runs on demand. |
 | `audit-memory` | Focused static audit for reachable memory corruption in first-party C, C++, unsafe Rust, native extensions, and FFI boundaries. Requires complete primitive-hit accounting and keeps library, CLI, parser, and foreign-runtime boundaries separate; runs on demand. |
 | `audit-package-manager` | Audits package manager clients, registries, and proxies against a bundled threat model. Triage selects it from source evidence; findings remain separate from design properties and unresolved assumptions. |
+| `audit-web` | Audits web sessions, browser origins, uploads and workflow state against a bundled ASVS-informed threat model. Triage selects it from source evidence. |
 | `cna-match` | Matches the repository to its CVE Numbering Authority so disclosures route to the right contact. |
 | `semgrep` | Runs semgrep with the `p/security-audit` and `p/secrets` rulesets and maps hits into the findings shape. |
 | `bandit` | Runs bandit over the repository's Python and maps its hits into the findings shape, grouped per test id and carrying bandit's confidence level, CWE, and rule documentation link. Gated on Python being one of the detected languages. |
@@ -80,9 +81,18 @@ The `package-manager` mode selects `audit-package-manager` for client,
 registry, and package proxy implementations. Its bundled threat model covers
 weakness patterns and design properties, with source-and-sink evidence,
 negative results, and unresolved assumptions retained beside the findings.
+The `web-api` mode selects `audit-web` for implemented web applications and
+APIs, including browser applications with first-party API workflows. It also
+selects `audit-authz` for implemented access boundaries and `audit-injection`
+for request-to-interpreter paths. Framework dependencies, outbound clients and
+static documentation alone do not activate it. Multiple modes share one
+deduplicated scan set; subproject scans classify only their scope. The audit
+distinguishes source-proven vulnerabilities from intended behavior, evidenced
+negative results and unresolved browser, server or deployment assumptions. Its
+ASVS reference does not imply compliance certification.
+
 Add another mode by defining its detection criteria in the triage reference
-and bundling its audit skill and threat model. Web application and embedded
-device modes are not bundled yet.
+and bundling its audit skill and threat model.
 
 ## Frontmatter
 

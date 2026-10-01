@@ -30,3 +30,33 @@ not qualify on that evidence alone. Neither does a collection of package
 recipes, a static registry catalog, a lockfile parser,
 or a dependency scanner. Look for implemented behavior rather than a known
 project name, language, manifest filename, or keyword in documentation.
+
+## web-api
+
+Select this mode when first-party source implements a web application or API:
+trace a registered HTTP, GraphQL, RPC-over-HTTP or WebSocket entry point into
+application behavior such as session handling, protected resource access,
+uploads, or business-state transitions. A browser application also qualifies
+when its first-party event handlers implement an application workflow against
+an API; record which server-side guarantees are outside this checkout.
+Firmware with an HTTP management application and package registries with HTTP
+APIs may match this mode alongside other modes.
+
+A web framework dependency, an outbound HTTP client, API documentation,
+generated SDKs, static documentation pages, or test-only servers do not
+establish a match. A generic HTTP transport/router library without application
+behavior is not a web application on that evidence alone. Trace the entry
+point in the current scan scope; do not borrow a server from another monorepo
+subproject. Keep uncertain classifications gated and record the missing
+evidence.
+
+Enqueue `audit-web` for a match. Also add `audit-authz` when the scoped
+application implements principal, ownership, role or tenant checks or
+protected resources. Add `audit-injection` when request-derived input reaches
+query construction, process execution, template evaluation or another
+interpreter. These are ordinary existing skills, not copies of their
+checklists. Gate a companion audit when its source-based applicability is
+absent. Union all matching modes' skills with the normal scan set before
+enqueueing: each skill is requested at most once, uses the same ref/subpath,
+and obeys the existing active/completed skip set. An inactive companion audit
+is recorded as skipped, not replaced with a second broad scan.

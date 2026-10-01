@@ -41,6 +41,37 @@ func TestAuditFindingSchemasReferenceSharedContract(t *testing.T) {
 	}
 }
 
+// Audit modes share one report envelope (scope, inventory, negative results,
+// assumptions and design properties) so each new mode wraps it instead of
+// copying it.
+func TestAuditModeSchemasReferenceSharedEnvelope(t *testing.T) {
+	const sharedModeRef = "../_shared/audit-mode-report.schema.json"
+	for _, path := range []string{
+		"../../skills/audit-package-manager/schema.json",
+		"../../skills/audit-web/schema.json",
+	} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		var wrapper map[string]any
+		if err := json.Unmarshal(raw, &wrapper); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		if got := wrapper["$ref"]; got != sharedModeRef {
+			t.Errorf("%s $ref = %v, want %q", path, got, sharedModeRef)
+		}
+		for _, keyword := range []string{"type", "properties", "$defs"} {
+			if _, ok := wrapper[keyword]; ok {
+				t.Errorf("%s defines validation keyword %q instead of using the shared envelope", path, keyword)
+			}
+		}
+		if bundled := loadBundledSchema(t, path); strings.Contains(bundled, ".schema.json") {
+			t.Errorf("%s bundled schema still references an external file", path)
+		}
+	}
+}
+
 func loadBundledSchema(t *testing.T, schemaPath string) string {
 	t.Helper()
 	parsed, err := skills.ParseFile(filepath.Join(filepath.Dir(schemaPath), "SKILL.md"))
