@@ -120,6 +120,10 @@ type Config struct {
 	// compatibility, only the claude backend also falls back to the
 	// ANTHROPIC_BASE_URL environment variable when this is unset.
 	ModelBaseURL string `yaml:"model_base_url"`
+	// ModelProxy keeps ANTHROPIC_API_KEY on the host: container scans get a
+	// per-scan token for a host-side Anthropic API proxy instead. Claude
+	// backend with API-key auth only. See docs/model-proxy.md.
+	ModelProxy *bool `yaml:"model_proxy"`
 	// LegacyAnthropicBaseURL is the former name of ModelBaseURL, kept so
 	// existing configs keep working. Load merges it into ModelBaseURL
 	// when that is unset; remove after one release.

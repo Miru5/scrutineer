@@ -58,6 +58,23 @@ identity_plugins:
 	}
 }
 
+func TestLoad_modelProxy(t *testing.T) {
+	c, err := Load(write(t, "model_proxy: true\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ModelProxy == nil || !*c.ModelProxy {
+		t.Errorf("model_proxy: %v", c.ModelProxy)
+	}
+	c, err = Load(write(t, "addr: 127.0.0.1:8080\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ModelProxy != nil {
+		t.Errorf("model_proxy unset in the file but parsed as %v", *c.ModelProxy)
+	}
+}
+
 func TestLoad_parsesFields(t *testing.T) {
 	path := write(t, `
 addr: 0.0.0.0:9000

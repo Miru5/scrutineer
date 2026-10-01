@@ -209,13 +209,15 @@ func (d ContainerRunner) checkBackendPreflight(ctx context.Context, sj SkillJob,
 		Egress                                     EgressSidecarConfig
 		ProviderAllow, ProviderAPIHosts            []string
 		HostGateway, ProviderHost, ProviderAPIPort string
+		ModelProxyURL                              string
 	}{Backend: HarnessName(h), Image: image, Digest: digest, Proxy: stableProxy, BaseURL: d.ModelBaseURL,
 		Model: job.Model, AllowedTools: job.AllowedTools,
 		Args: d.harnessArgv(job), Env: backendEnvironment(h, d.ModelBaseURL, provider.Env), Credentials: credentials,
 		Provider: d.OpencodeProviders[provider.ID], Runtime: d.Runtime, Hardened: d.Hardened,
 		RuntimeOnly: d.HardenedRuntimeOnly, Relabel: d.SELinuxRelabel, Egress: d.Egress,
 		ProviderAllow: d.ProviderProxy.Allow, ProviderAPIHosts: d.ProviderProxy.APIHosts,
-		HostGateway: d.HostGatewayIP, ProviderHost: d.ProviderProxy.ContainerHost, ProviderAPIPort: d.ProviderProxy.APIPort})
+		HostGateway: d.HostGatewayIP, ProviderHost: d.ProviderProxy.ContainerHost, ProviderAPIPort: d.ProviderProxy.APIPort,
+		ModelProxyURL: d.ModelProxyURL})
 	if err != nil {
 		return err
 	}
@@ -249,6 +251,6 @@ func (d ContainerRunner) checkBackendPreflight(ctx context.Context, sj SkillJob,
 			defer cancel()
 			_ = exec.CommandContext(cleanupCtx, runtimeBin(d.Runtime), "rm", "--force", name).Run()
 		}()
-		return runBackendProbe(ctx, h, runtimeBin(d.Runtime), append(base, d.harnessArgv(job)...), environmentWith(os.Environ(), provider.Env), work)
+		return runBackendProbe(ctx, h, runtimeBin(d.Runtime), append(base, d.harnessArgv(job)...), environmentWith(os.Environ(), d.containerProcessEnv(provider.Env)), work)
 	})
 }

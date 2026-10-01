@@ -89,6 +89,12 @@ type Server struct {
 	Worker *worker.Worker
 	tmpl   *template.Template
 
+	// ModelProxy, when set (-model-proxy), serves worker.ModelProxyPathPrefix
+	// for scan containers. It shares the scan-facing /api/ exemption from the
+	// browser checks: securityHeaders rejects the host.docker.internal Host
+	// every container request carries.
+	ModelProxy *worker.ModelProxy
+
 	// SkillsRepoSHA pins the commit of -skills-repo loaded at startup. Set
 	// once by main after loadSkills resolves it; stamped onto every Scan
 	// row enqueueSkillWith creates so two runs a week apart can be told
@@ -631,6 +637,9 @@ func (s *Server) Handler() http.Handler {
 	// openAPISpecHandler.
 	root.Handle("GET /api/openapi.yaml", s.openAPISpecHandler())
 	root.Handle("/api/", s.apiHandler())
+	if s.ModelProxy != nil {
+		root.Handle(worker.ModelProxyPathPrefix+"/", s.ModelProxy)
+	}
 	root.Handle("/", securityHeaders(mux))
 	return logRequests(s.Log, root)
 }

@@ -44,6 +44,7 @@ func fullConfig() *config.Config {
 		Codex:           config.Codex{AuthFile: "/var/lib/scrutineer/codex-rubygems/auth.json"},
 		NoContainer:     new(true),
 		Hardened:        new(true),
+		ModelProxy:      new(true),
 		RunnerImage:     "custom:v1",
 		SkillsRepo:      "https://example.com/skills.git",
 		SkillsRepoToken: "private-skills-token",
@@ -82,6 +83,9 @@ func TestFlagsMerge_configFillsUnset(t *testing.T) {
 	}
 	if !f.hardened {
 		t.Errorf("hardened not applied")
+	}
+	if !f.modelProxy {
+		t.Errorf("modelProxy not applied")
 	}
 	if !slices.Equal(f.hostSkills, []string{"verify"}) {
 		t.Errorf("hostSkills = %v, want [verify]", f.hostSkills)
@@ -127,9 +131,13 @@ func TestFlagsMerge_cliFlagWins(t *testing.T) {
 		set: map[string]bool{
 			"addr": true, "clone": true, "concurrency": true,
 			"model-base-url": true, "federation-contact": true,
+			"model-proxy": true,
 		},
 	}
 	f.merge(cfg)
+	if f.modelProxy {
+		t.Errorf("model_proxy config overrode an explicit -model-proxy=false")
+	}
 	if f.addr != "127.0.0.1:8080" {
 		t.Errorf("addr overridden despite explicit flag: %q", f.addr)
 	}
@@ -631,6 +639,41 @@ func TestValidateFlags_rejectsInsecureEnvironmentBaseURL(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "must use https") {
 		t.Fatalf("resolved environment base URL error = %v", err)
 	}
+}
+
+func TestValidateModelProxyFlags(t *testing.T) {
+	t.Run("disabled is a no-op regardless of other flags", func(t *testing.T) {
+		if err := validateModelProxyFlags(&flags{backend: "codex", noContainer: true}); err != nil {
+			t.Errorf("modelProxy=false: err = %v, want nil", err)
+		}
+	})
+	t.Run("non-claude backend refused", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+		err := validateModelProxyFlags(&flags{modelProxy: true, backend: "codex"})
+		if err == nil || !strings.Contains(err.Error(), "claude") {
+			t.Fatalf("err = %v, want a claude-backend complaint", err)
+		}
+	})
+	t.Run("no-container refused", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+		err := validateModelProxyFlags(&flags{modelProxy: true, noContainer: true})
+		if err == nil || !strings.Contains(err.Error(), "no-container") {
+			t.Fatalf("err = %v, want a no-container complaint", err)
+		}
+	})
+	t.Run("missing key refused", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "")
+		err := validateModelProxyFlags(&flags{modelProxy: true})
+		if err == nil || !strings.Contains(err.Error(), "ANTHROPIC_API_KEY") {
+			t.Fatalf("err = %v, want an ANTHROPIC_API_KEY complaint", err)
+		}
+	})
+	t.Run("ok case", func(t *testing.T) {
+		t.Setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+		if err := validateModelProxyFlags(&flags{modelProxy: true}); err != nil {
+			t.Errorf("err = %v, want nil for a default-backend containerised scan with a key set", err)
+		}
+	})
 }
 
 func TestRegisterFlags_hardenedRuntimeOnlyAliasParsesFromArgv(t *testing.T) {

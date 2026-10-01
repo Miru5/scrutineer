@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -94,6 +95,15 @@ type ContainerRunner struct {
 	// Its semaphore serializes Codex execution because the CLI can rotate
 	// auth.json.
 	CodexAccountAuth *CodexAccountAuth
+	// ModelProxy, when set, keeps ANTHROPIC_API_KEY on the host. Each RunSkill
+	// issues a scan token the container presents to ModelProxyURL instead.
+	ModelProxy *ModelProxy
+	// ModelProxyURL is the base URL containers use to reach ModelProxy through
+	// the egress proxy.
+	ModelProxyURL string
+	// modelProxyToken is this scan's proxy token, set by issueModelProxyToken
+	// and threaded into the container's ANTHROPIC_API_KEY by containerProcessEnv.
+	modelProxyToken string
 	// detectProfile lets tests stub profile auto-detection without a container
 	// runtime. nil means DetectProfile.
 	detectProfile func(ctx context.Context, rt ContainerRuntime, runnerImage, srcDir string, relabel bool) Profile
@@ -264,6 +274,29 @@ func (s containerRunErrorState) failure(provider opencodeProvider, runtimeName s
 	return fmt.Errorf("%s exited: %w", runtimeName, waitErr)
 }
 
+// prepareExecution runs RunSkill's two setup steps that each carry their own
+// cleanup (the OpenCode provider proxy and, when configured, the model proxy
+// token) then merges them into a single cleanup func. Split out of RunSkill so
+// its own top level only threads through one setup call and one error check
+// for both, keeping RunSkill's cognitive complexity down as these toggles
+// accumulate.
+func (d ContainerRunner) prepareExecution(ctx context.Context, sj SkillJob) (ContainerRunner, opencodeProvider, SkillResult, func(), error) {
+	noop := func() {}
+	d, provider, result, cleanupProviderProxy, err := d.prepareOpencodeExecution(ctx, sj.Model)
+	if err != nil {
+		return d, provider, result, noop, err
+	}
+	d, revokeModelToken, err := d.issueModelProxyToken(ctx)
+	if err != nil {
+		cleanupProviderProxy()
+		return d, provider, result, noop, err
+	}
+	return d, provider, result, func() {
+		revokeModelToken()
+		cleanupProviderProxy()
+	}, nil
+}
+
 // RunSkill runs a skill inside an ephemeral container. The whole workspace
 // (clone + staged .claude/skills + context.json + output) is mounted at
 // /work read-write so claude can read the skill files and write its output.
@@ -275,11 +308,11 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		return SkillResult{}, errors.New("codex account auth requires a per-job state directory")
 	}
 
-	d, provider, result, cleanupProviderProxy, err := d.prepareOpencodeExecution(ctx, sj.Model)
+	d, provider, result, cleanupExecution, err := d.prepareExecution(ctx, sj)
 	if err != nil {
 		return result, err
 	}
-	defer cleanupProviderProxy()
+	defer cleanupExecution()
 
 	var src string
 	if sj.SrcReady {
@@ -349,18 +382,14 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		return result, err
 	}
 
-	logLine := "$ " + runtimeBin(d.Runtime) + " run --rm " + image + " <skill:" + sj.Name + ">"
-	if d.ModelBaseURL != "" {
-		logLine += " [MODEL_BASE_URL=" + redactURLUserinfo(d.ModelBaseURL) + "]"
-	}
-	emit(Event{Kind: KindText, Text: logLine})
+	emit(Event{Kind: KindText, Text: d.runLogLine(image, sj.Name)})
 
 	runErrors := containerRunErrorState{}
 	wrappedEmit := func(e Event) {
 		runErrors.observe(e, h, provider.ID)
 		emit(e)
 	}
-	hitMaxTurns, sessionID, waitErr := d.runContainerOnce(ctx, runBase, sj, provider.Env, wrappedEmit)
+	hitMaxTurns, sessionID, waitErr := d.runContainerOnce(ctx, runBase, sj, d.containerProcessEnv(provider.Env), wrappedEmit)
 
 	if waitErr != nil && sj.ResumeSessionID != "" && sessionID == "" && runErrors.resumeRetryable() {
 		if sj.ResumePrompt != "" && sj.Prompt == "" {
@@ -377,7 +406,7 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		emit(Event{Kind: KindText, Text: "resume of session " + sj.ResumeSessionID + " failed; restarting fresh"})
 		fresh := sj
 		fresh.ResumeSessionID = ""
-		hitMaxTurns, sessionID, waitErr = d.runContainerOnce(ctx, runBase, fresh, provider.Env, wrappedEmit)
+		hitMaxTurns, sessionID, waitErr = d.runContainerOnce(ctx, runBase, fresh, d.containerProcessEnv(provider.Env), wrappedEmit)
 	}
 
 	res := result
@@ -392,6 +421,21 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 		return res, runErrors.failure(provider, runtimeBin(d.Runtime), waitErr)
 	}
 	return res, nil
+}
+
+// runLogLine builds RunSkill's announcement line for a scan: the runtime
+// invocation plus, when set, the redacted model base URL and whether a model
+// proxy is in play. Split out so its own branches (currently two, more as
+// toggles accumulate) don't count against RunSkill's cognitive complexity.
+func (d ContainerRunner) runLogLine(image, skillName string) string {
+	line := "$ " + runtimeBin(d.Runtime) + " run --rm " + image + " <skill:" + skillName + ">"
+	if d.ModelBaseURL != "" {
+		line += " [MODEL_BASE_URL=" + redactURLUserinfo(d.ModelBaseURL) + "]"
+	}
+	if d.ModelProxy != nil {
+		line += " [model proxy]"
+	}
+	return line
 }
 
 // runContainerOnce launches one container for the given skill job, appending
@@ -439,12 +483,7 @@ func (d ContainerRunner) runContainerOnce(ctx context.Context, runBase []string,
 func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet hardenedNet, harnessStateDir string, provider opencodeProvider, workdir string) []string {
 	args := d.buildContainerBaseArgs(absWork, hnet, workdir)
 	// Agent credentials and resumable state are deliberately absent from probes.
-	for _, e := range d.harness().Env(d.ModelBaseURL) {
-		if provider.Configured && opencodeInheritedCredential(e) {
-			continue
-		}
-		args = append(args, "-e", e)
-	}
+	args = append(args, d.harnessEnvArgs(provider)...)
 	keys := make([]string, 0, len(provider.Env))
 	for key := range provider.Env {
 		keys = append(keys, key)
@@ -464,6 +503,85 @@ func (d ContainerRunner) buildRunArgsForProvider(absWork, image string, hnet har
 		args = d.appendOpencodeStateArgs(args, harnessStateDir, provider)
 	}
 	return append(args, "--", image)
+}
+
+// harnessEnvArgs returns the -e flags for the active harness's own env
+// (Harness.Env), skipping an OpenCode-inherited credential when a provider is
+// configured. When a ModelProxy is set, the claude credential and base-url
+// keys are skipped entirely and replaced with the proxy's own base URL plus a
+// bare ANTHROPIC_API_KEY passthrough; containerProcessEnv is what fills that
+// passthrough with the scan's proxy token instead of the host's real key.
+func (d ContainerRunner) harnessEnvArgs(provider opencodeProvider) []string {
+	var args []string
+	for _, e := range d.harness().Env(d.ModelBaseURL) {
+		if provider.Configured && opencodeInheritedCredential(e) {
+			continue
+		}
+		if d.ModelProxy != nil && modelProxyStripsKey(e) {
+			continue
+		}
+		args = append(args, "-e", e)
+	}
+	if d.ModelProxy != nil {
+		args = append(args, "-e", "ANTHROPIC_BASE_URL="+d.ModelProxyURL, "-e", "ANTHROPIC_API_KEY")
+	}
+	return args
+}
+
+// modelProxyCredentialEnv lists the claude credential and base-url env keys a
+// model-proxy scan must never receive from the harness's own Env():
+// harnessEnvArgs substitutes its own ANTHROPIC_BASE_URL and a bare
+// ANTHROPIC_API_KEY. CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_AUTH_TOKEN have no
+// substitute because account/OAuth auth is out of scope for -model-proxy.
+var modelProxyCredentialEnv = []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"}
+
+// modelProxyStripsKey reports whether entry (a bare "KEY" or "KEY=VALUE"
+// harness env assignment) names a credential model-proxy mode withholds.
+func modelProxyStripsKey(entry string) bool {
+	key, _, _ := strings.Cut(entry, "=")
+	return slices.Contains(modelProxyCredentialEnv, key)
+}
+
+// issueModelProxyToken issues this scan's short-lived proxy token when a
+// ModelProxy is configured; the returned ContainerRunner carries the token,
+// and the caller must defer the revoke func so the token stops working the
+// moment the scan ends. Without a ModelProxy this is a no-op passthrough. With
+// one but no ModelProxyURL to reach it through, the scan is refused rather
+// than silently handing the container the real key.
+func (d ContainerRunner) issueModelProxyToken(ctx context.Context) (ContainerRunner, func(), error) {
+	noop := func() {}
+	if d.ModelProxy == nil {
+		return d, noop, nil
+	}
+	if d.ModelProxyURL == "" {
+		return d, noop, errors.New("model proxy is configured but ModelProxyURL is empty; refusing to run without a way to reach it")
+	}
+	var expires time.Time
+	if deadline, ok := ctx.Deadline(); ok {
+		expires = deadline
+	}
+	token, revoke := d.ModelProxy.Issue(expires)
+	d.modelProxyToken = token
+	return d, revoke, nil
+}
+
+// containerProcessEnv is the map runContainerOnce, the backend preflight probe
+// and the OpenCode readiness probe merge onto os.Environ() before starting
+// the runtime process. In model-proxy mode this is what stops the
+// runtime CLI copying the host's real ANTHROPIC_API_KEY into the bare
+// "-e ANTHROPIC_API_KEY" harnessEnvArgs appended: the override replaces it
+// with this scan's proxy token, or "" when none was issued, which fails
+// closed instead of falling back to the host key.
+func (d ContainerRunner) containerProcessEnv(providerEnv map[string]string) map[string]string {
+	if d.ModelProxy == nil {
+		return providerEnv
+	}
+	env := make(map[string]string, len(providerEnv)+1)
+	for k, v := range providerEnv {
+		env[k] = v
+	}
+	env["ANTHROPIC_API_KEY"] = d.modelProxyToken
+	return env
 }
 
 // buildContainerBaseArgs shares isolation, workspace, and network policy without

@@ -382,6 +382,7 @@ Scrutineer builds and runs on Windows hosts: every release ships a `windows-amd6
 | `-max-turns` | `0` | Per-scan turn cap (0 = unlimited); claude and copilot backends only, codex and opencode have no turn cap |
 | `-schema-strict` | `false` | Fail a scan when its `report.json` does not validate against the skill's `schema.json` (default: warn in the scan log and parse anyway) |
 | `-model-base-url` | - | Custom model API base URL for the active backend (env fallback: `ANTHROPIC_BASE_URL` for claude). `-anthropic-base-url` is a deprecated alias. |
+| `-model-proxy` | false | Keep `ANTHROPIC_API_KEY` off scan containers: each scan gets a per-scan token for a host-side Anthropic API proxy. Claude backend with API-key auth only, requires the containerised runner. See [docs/model-proxy.md](docs/model-proxy.md). |
 | `-ecosystems-enrichment` | `true` | Enrich repositories from ecosyste.ms: the per-repository cache, the warm on repo add, and the PURL-to-repository resolution behind SBOM and dependency import. `=false` stops every lookup scrutineer's own process makes, leaves `egress_allow` untouched (the bundled skills still fetch ecosyste.ms themselves), and leaves the Dependents tab and dependent-exposure analysis with no data |
 | `-recipients-file` | - | Age recipients file (public keys) for encrypted export |
 | `-identity-file` | - | Age identity file or SSH private key for decrypting imports and encrypted federation feeds |

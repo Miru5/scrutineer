@@ -234,6 +234,11 @@
 # to the ANTHROPIC_BASE_URL environment variable when empty.
 # model_base_url: https://my-proxy.corp.com/v1
 
+# Keep ANTHROPIC_API_KEY on the host. Each container scan gets a short-lived
+# token for a host-side Anthropic API proxy instead of the key itself. Claude
+# backend with API-key auth only; see docs/model-proxy.md.
+# model_proxy: false
+
 # Claude subscription rate-limit auto-resume needs no configuration. Reset times
 # come from claude-code stream output; latest window status appears on /usage.
 

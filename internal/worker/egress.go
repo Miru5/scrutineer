@@ -119,8 +119,43 @@ func apiConnectGuard(p *EgressProxy) http.Handler {
 				return
 			}
 		}
+		if r.Method != http.MethodConnect && r.URL.IsAbs() {
+			if host, _ := splitProxyTarget(r.URL.Host); proxyAPIHost(p, host) {
+				w = newFlushingResponseWriter(w)
+			}
+		}
 		p.ServeHTTP(w, r)
 	})
+}
+
+// flushingResponseWriter flushes after every write. The harness proxy's
+// forward path copies the upstream body with io.Copy and never flushes, so an
+// SSE response from the host API (the -model-proxy route) would otherwise sit
+// in the server's output buffer instead of streaming to the scan. It
+// deliberately does not implement io.ReaderFrom: that would let io.Copy take
+// the response's buffered ReadFrom path and skip the flushes.
+type flushingResponseWriter struct {
+	w  http.ResponseWriter
+	rc *http.ResponseController
+}
+
+func newFlushingResponseWriter(w http.ResponseWriter) *flushingResponseWriter {
+	return &flushingResponseWriter{w: w, rc: http.NewResponseController(w)}
+}
+
+func (f *flushingResponseWriter) Header() http.Header { return f.w.Header() }
+
+func (f *flushingResponseWriter) WriteHeader(code int) {
+	f.w.WriteHeader(code)
+	_ = f.rc.Flush()
+}
+
+func (f *flushingResponseWriter) Write(b []byte) (int, error) {
+	n, err := f.w.Write(b)
+	if err == nil {
+		_ = f.rc.Flush()
+	}
+	return n, err
 }
 
 func validProxyAuthorization(token, header string) bool {

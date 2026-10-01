@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -225,6 +227,182 @@ func TestBuildRunArgs_SELinuxRelabel(t *testing.T) {
 		if strings.HasSuffix(a, ":z") || strings.HasSuffix(a, ",z") {
 			t.Errorf("did not expect any :z relabel when SELinuxRelabel is false, got %q in %v", a, got)
 		}
+	}
+}
+
+// TestBuildRunArgs_ModelProxy exercises harnessEnvArgs's -model-proxy branch: a
+// claude-like harness's own credential and base-url env must never reach the
+// container. The proxy's base URL and a bare passthrough take their place, so
+// containerProcessEnv (proved separately) is what fills that passthrough with
+// the scan's token rather than the host's real key.
+func TestBuildRunArgs_ModelProxy(t *testing.T) {
+	h := stubHarness{env: []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL=https://original.example"}}
+	proxyURL := "http://gw.internal:8080" + ModelProxyPathPrefix
+	d := ContainerRunner{Harness: h, ModelProxy: &ModelProxy{}, ModelProxyURL: proxyURL}
+	got := d.buildRunArgs("img:latest", hardenedNet{}, "")
+
+	if !hasAdjacent(got, "-e", "ANTHROPIC_BASE_URL="+proxyURL) {
+		t.Errorf("expected the model proxy base url in %v", got)
+	}
+	if !hasAdjacent(got, "-e", "ANTHROPIC_API_KEY") {
+		t.Errorf("expected a bare ANTHROPIC_API_KEY passthrough in %v", got)
+	}
+	for _, leaked := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL=https://original.example"} {
+		if hasAdjacent(got, "-e", leaked) {
+			t.Errorf("model proxy mode leaked %q into %v", leaked, got)
+		}
+	}
+}
+
+// TestBuildRunArgs_WithoutModelProxyUnchanged pins today's args when
+// ModelProxy is nil: -model-proxy must be strictly opt-in.
+func TestBuildRunArgs_WithoutModelProxyUnchanged(t *testing.T) {
+	h := stubHarness{env: []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}}
+	got := ContainerRunner{Harness: h}.buildRunArgs("img:latest", hardenedNet{}, "")
+	if !hasAdjacent(got, "-e", "ANTHROPIC_API_KEY") || !hasAdjacent(got, "-e", "CLAUDE_CODE_OAUTH_TOKEN") {
+		t.Errorf("expected the harness env unchanged without a model proxy, got %v", got)
+	}
+}
+
+func TestContainerProcessEnv(t *testing.T) {
+	providerEnv := map[string]string{"FOO": "bar"}
+
+	without := ContainerRunner{}
+	if got := without.containerProcessEnv(providerEnv); !reflect.DeepEqual(got, providerEnv) {
+		t.Errorf("no proxy: containerProcessEnv = %v, want the provider env unchanged", got)
+	}
+
+	withToken := ContainerRunner{ModelProxy: &ModelProxy{}, modelProxyToken: "scrutineer-scan-abc"}
+	got := withToken.containerProcessEnv(providerEnv)
+	if got["ANTHROPIC_API_KEY"] != "scrutineer-scan-abc" {
+		t.Errorf("token not injected: %v", got)
+	}
+	if got["FOO"] != "bar" {
+		t.Errorf("provider env dropped: %v", got)
+	}
+	if providerEnv["ANTHROPIC_API_KEY"] != "" {
+		t.Error("containerProcessEnv mutated the caller's provider env map")
+	}
+
+	withoutToken := ContainerRunner{ModelProxy: &ModelProxy{}}
+	got = withoutToken.containerProcessEnv(providerEnv)
+	if v, ok := got["ANTHROPIC_API_KEY"]; !ok || v != "" {
+		t.Errorf("an unissued token must still override to empty (fail closed), got %v", got)
+	}
+}
+
+func TestIssueModelProxyToken(t *testing.T) {
+	without := ContainerRunner{}
+	got, revoke, err := without.issueModelProxyToken(context.Background())
+	if err != nil || got.modelProxyToken != "" {
+		t.Fatalf("no proxy: got %+v, err %v, want a no-op passthrough", got, err)
+	}
+	revoke() // must not panic
+
+	mp, err := NewModelProxy("", "key", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	noURL := ContainerRunner{ModelProxy: mp}
+	if _, _, err := noURL.issueModelProxyToken(context.Background()); err == nil {
+		t.Error("expected an error when ModelProxyURL is empty")
+	}
+
+	withURL := ContainerRunner{ModelProxy: mp, ModelProxyURL: "http://gw.internal:8080" + ModelProxyPathPrefix}
+	issued, revoke, err := withURL.issueModelProxyToken(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.modelProxyToken == "" {
+		t.Fatal("expected a non-empty token")
+	}
+	revoke()
+	req := httptest.NewRequest(http.MethodGet, ModelProxyPathPrefix+"/v1/models", nil)
+	req.Header.Set("X-Api-Key", issued.modelProxyToken)
+	w := httptest.NewRecorder()
+	mp.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("revoked token status = %d, want 401", w.Code)
+	}
+}
+
+// TestRunSkill_ModelProxyKeepsRealKeyOffRuntime proves the real
+// ANTHROPIC_API_KEY never reaches the runtime process's env or argv: a fake
+// runtime binary records both, standing in for what the docker/podman CLI
+// would otherwise inherit and copy into the container via the bare
+// "-e ANTHROPIC_API_KEY". It also proves the scan's token is revoked the
+// moment RunSkill returns.
+func TestRunSkill_ModelProxyKeepsRealKeyOffRuntime(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	defer upstream.Close()
+
+	const realKey = "sk-ant-REAL-SECRET-should-never-leak"
+	mp, err := NewModelProxy(upstream.URL, realKey, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxyServer := httptest.NewServer(mp)
+	defer proxyServer.Close()
+
+	// The operator's real key is present in the host process environment,
+	// exactly as it would be for any claude scan; model-proxy mode is what
+	// must stop it flowing through to the runtime.
+	t.Setenv("ANTHROPIC_API_KEY", realKey)
+
+	recordDir := t.TempDir()
+	t.Setenv("RECORD_DIR", recordDir)
+	binDir := t.TempDir()
+	script := "#!/bin/sh\nenv > \"$RECORD_DIR/env.txt\"\nprintf '%s\\n' \"$*\" > \"$RECORD_DIR/argv.txt\"\nexit 0\n"
+	runtimePath := writeFakeBin(t, binDir, "runtime", script)
+
+	d := ContainerRunner{
+		Runtime:       ContainerRuntime{Bin: runtimePath},
+		Harness:       dockerNoopHarness{stubHarness{env: []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"}}},
+		ModelProxy:    mp,
+		ModelProxyURL: proxyServer.URL + ModelProxyPathPrefix,
+	}
+
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(work, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := d.RunSkill(context.Background(), SkillJob{WorkRoot: work, SrcReady: true, Name: "noop"}, func(Event) {}); err != nil {
+		t.Fatalf("RunSkill: %v", err)
+	}
+
+	envData, err := os.ReadFile(filepath.Join(recordDir, "env.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	argvData, err := os.ReadFile(filepath.Join(recordDir, "argv.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(envData), realKey) {
+		t.Errorf("real ANTHROPIC_API_KEY reached the runtime process env:\n%s", envData)
+	}
+	if strings.Contains(string(argvData), realKey) {
+		t.Errorf("real ANTHROPIC_API_KEY reached the runtime argv:\n%s", argvData)
+	}
+
+	var issuedToken string
+	for _, line := range strings.Split(string(envData), "\n") {
+		if v, ok := strings.CutPrefix(line, "ANTHROPIC_API_KEY="); ok {
+			issuedToken = v
+		}
+	}
+	if !strings.HasPrefix(issuedToken, "scrutineer-scan-") {
+		t.Fatalf("expected a scan token in ANTHROPIC_API_KEY, got %q", issuedToken)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, ModelProxyPathPrefix+"/v1/models", nil)
+	req.Header.Set("X-Api-Key", issuedToken)
+	w := httptest.NewRecorder()
+	mp.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("token still valid after RunSkill returned: status = %d", w.Code)
 	}
 }
 
