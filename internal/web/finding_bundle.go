@@ -169,7 +169,11 @@ func (s *Server) bundleEntriesAt(f *db.Finding, repo *db.Repository, generatedAt
 		contents["patch.diff"] = "Suggested unified diff; applied to commit recorded in the OSV affected[] git range"
 	}
 
-	if poc := bundlePoC(f.Validation); len(poc) > 0 {
+	poc, err := bundlePoC(f.Validation)
+	if err != nil {
+		return nil, fmt.Errorf("build PoC: %w", err)
+	}
+	if len(poc) > 0 {
 		entries = append(entries, poc...)
 		contents["poc/"] = "Runnable reproduction: run.sh plus probe/input files extracted from the finding's Validation step; README.md carries the verbatim prose"
 	}
