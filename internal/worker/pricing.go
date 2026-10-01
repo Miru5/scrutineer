@@ -13,19 +13,34 @@ const (
 	modelGPT6SolID      = "gpt-6-sol"
 	modelGPT6LunaID     = "gpt-6-luna"
 	perMillionTokens    = 1e6
+
+	// Standard base list prices in USD per million tokens. The aggregate
+	// Usage event cannot identify requests that crossed the long-context
+	// threshold, so these deliberately remain base-rate estimates.
+	// https://developers.openai.com/api/docs/pricing
+	gpt6AstraInputPrice       = 10.00
+	gpt6AstraOutputPrice      = 50.00
+	gpt6AstraCachedInputPrice = 1.00
+	gpt6AstraCacheWritePrice  = 12.50
+
+	gpt6SolInputPrice       = 2.00
+	gpt6SolOutputPrice      = 10.00
+	gpt6SolCachedInputPrice = 0.20
+	gpt6SolCacheWritePrice  = 2.50
+
+	gpt6LunaInputPrice       = 0.10
+	gpt6LunaOutputPrice      = 0.50
+	gpt6LunaCachedInputPrice = 0.01
+	gpt6LunaCacheWritePrice  = 0.125
 )
 
 // modelPrice is one model's standard base list price in USD per million tokens.
 type modelPrice struct{ in, cachedIn, cacheWrite, out float64 }
 
-// gpt6Pricing holds the GPT-6 family prices. The aggregate Usage event cannot
-// identify requests that crossed the long-context threshold, so these
-// deliberately remain base-rate estimates.
-// https://developers.openai.com/api/docs/pricing
 var gpt6Pricing = map[string]modelPrice{
-	modelGPT6AstraID: {in: 10.00, cachedIn: 1.00, cacheWrite: 12.50, out: 50.00},
-	modelGPT6SolID:   {in: 2.00, cachedIn: 0.20, cacheWrite: 2.50, out: 10.00},
-	modelGPT6LunaID:  {in: 0.10, cachedIn: 0.01, cacheWrite: 0.125, out: 0.50},
+	modelGPT6AstraID: {gpt6AstraInputPrice, gpt6AstraCachedInputPrice, gpt6AstraCacheWritePrice, gpt6AstraOutputPrice},
+	modelGPT6SolID:   {gpt6SolInputPrice, gpt6SolCachedInputPrice, gpt6SolCacheWritePrice, gpt6SolOutputPrice},
+	modelGPT6LunaID:  {gpt6LunaInputPrice, gpt6LunaCachedInputPrice, gpt6LunaCacheWritePrice, gpt6LunaOutputPrice},
 }
 
 // CostFromUsage computes the dollar cost of one result event's token usage
