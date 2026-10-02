@@ -49,7 +49,7 @@ func Digest(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func Validate(files []File) error {
+func ValidateFiles(files []File) error {
 	if len(files) == 0 || len(files) > MaxFiles {
 		return fmt.Errorf("PoC must contain 1 to %d files", MaxFiles)
 	}
@@ -59,13 +59,10 @@ func Validate(files []File) error {
 		if !ValidPath(file.Path) {
 			return fmt.Errorf("invalid PoC path %q", file.Path)
 		}
-		name := strings.ToLower(file.Path)
-		for other := range seen {
-			if name == other || strings.HasPrefix(name, other+"/") || strings.HasPrefix(other, name+"/") {
-				return fmt.Errorf("conflicting PoC path %q", file.Path)
-			}
+		if NameConflict(seen, file.Path) {
+			return fmt.Errorf("conflicting PoC path %q", file.Path)
 		}
-		seen[name] = true
+		seen[strings.ToLower(file.Path)] = true
 		total += len(file.Data)
 		if len(file.Data) > MaxFileBytes || total > MaxTotalBytes {
 			return fmt.Errorf("PoC exceeds file or total byte limit")
@@ -85,7 +82,7 @@ func Decode(data []byte) ([]File, error) {
 	if err := json.Unmarshal(data, &files); err != nil {
 		return nil, err
 	}
-	if err := Validate(files); err != nil {
+	if err := ValidateFiles(files); err != nil {
 		return nil, err
 	}
 	return files, nil
@@ -120,7 +117,7 @@ func Capture(root *os.Root) ([]File, error) {
 		return nil, err
 	}
 	slices.SortFunc(files, func(a, b File) int { return strings.Compare(a.Path, b.Path) })
-	if err := Validate(files); err != nil {
+	if err := ValidateFiles(files); err != nil {
 		return nil, err
 	}
 	return files, nil

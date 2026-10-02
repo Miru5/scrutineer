@@ -1,11 +1,14 @@
 package worker
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"regexp"
+	"slices"
+	"strings"
 
 	"gorm.io/gorm/clause"
 
@@ -17,25 +20,49 @@ var pocFindingID = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 const pocExecutablePerm = 0o700
 
+// Agents can read the scan token from context.json, and a model proxy token
+// or the host model credentials from their environment.
+var modelProxyTokenPattern = regexp.MustCompile(modelProxyTokenPrefix + `[0-9a-f]{64}`)
+
+var credentialEnvSuffixes = []string{"_API_KEY", "_TOKEN", "_AUTH_CONTENT", "_SECRET"}
+
+// minCredentialBytes keeps short flag values such as GH_TOKEN=1 from
+// rejecting every PoC that contains the same characters.
+const minCredentialBytes = 16
+
 // PoCCaptureError reports a failed capture after the finding was saved.
 type PoCCaptureError struct{ error }
 
 func (e *PoCCaptureError) Unwrap() error { return e.error }
 
-func (w *Worker) captureFindingPoC(scan *db.Scan, finding *db.Finding) error {
+func (w *Worker) captureFindingPoC(scan *db.Scan, finding *db.Finding) (err error) {
+	credentials := pocCredentials(scan)
+	defer func() {
+		if err != nil {
+			err = redactCredentials(err, credentials)
+		}
+	}()
 	if w.DataDir == "" || !pocFindingID.MatchString(finding.FindingID) {
 		return nil
 	}
+	root, err := openFindingPoC(w.scanWorkRoot(scan), finding.FindingID)
+	if err != nil {
+		return fmt.Errorf("capture PoC for finding %d: %w", finding.ID, err)
+	}
+	if root == nil {
+		return nil
+	}
+	defer func() { _ = root.Close() }()
 	existing, err := db.LoadFindingPoC(w.DB, finding.ID)
 	if err != nil || existing != nil {
 		return err
 	}
-	files, err := capturePoCFiles(w.scanWorkRoot(scan), finding.FindingID)
-	if err == nil && files == nil {
-		return nil
-	}
+	files, err := poc.Capture(root)
 	if err != nil {
 		return fmt.Errorf("capture PoC for finding %d: %w", finding.ID, err)
+	}
+	if containsCredential(files, credentials) {
+		return fmt.Errorf("capture PoC for finding %d: files contain a scan or model credential", finding.ID)
 	}
 	data, err := json.Marshal(files)
 	if err != nil {
@@ -46,6 +73,15 @@ func (w *Worker) captureFindingPoC(scan *db.Scan, finding *db.Finding) error {
 }
 
 func capturePoCFiles(workRoot, findingID string) ([]poc.File, error) {
+	root, err := openFindingPoC(workRoot, findingID)
+	if err != nil || root == nil {
+		return nil, err
+	}
+	defer func() { _ = root.Close() }()
+	return poc.Capture(root)
+}
+
+func openFindingPoC(workRoot, findingID string) (*os.Root, error) {
 	root, err := os.OpenRoot(workRoot)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -69,8 +105,7 @@ func capturePoCFiles(workRoot, findingID string) ([]poc.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = findingRoot.Close() }()
-	return poc.Capture(findingRoot)
+	return findingRoot, nil
 }
 
 func (w *Worker) stageFindingPoC(workRoot string, scan *db.Scan, skill *db.Skill) error {
@@ -92,13 +127,24 @@ func (w *Worker) stageFindingPoC(workRoot string, scan *db.Scan, skill *db.Skill
 	if err != nil {
 		return fmt.Errorf("load captured PoC: %w", err)
 	}
+	if err := writePoCFiles(workRoot, "poc/", files); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(row.Manifest(files), "", "  ")
+	if err != nil {
+		return err
+	}
+	return replaceWorkspaceFile(workRoot, "poc-manifest.json", data)
+}
+
+func writePoCFiles(workRoot, prefix string, files []poc.File) error {
 	root, err := os.OpenRoot(workRoot)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = root.Close() }()
 	for _, file := range files {
-		path := "poc/" + file.Path
+		path := prefix + file.Path
 		if err := replaceWorkspaceFile(workRoot, path, file.Data); err != nil {
 			return err
 		}
@@ -108,9 +154,47 @@ func (w *Worker) stageFindingPoC(workRoot string, scan *db.Scan, skill *db.Skill
 			}
 		}
 	}
-	data, err := json.MarshalIndent(row.Manifest(files), "", "  ")
-	if err != nil {
+	return nil
+}
+
+func pocCredentials(scan *db.Scan) []string {
+	var credentials []string
+	if scan.APIToken != "" {
+		credentials = append(credentials, scan.APIToken)
+	}
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		if len(value) < minCredentialBytes {
+			continue
+		}
+		if slices.ContainsFunc(credentialEnvSuffixes, func(suffix string) bool { return strings.HasSuffix(key, suffix) }) {
+			credentials = append(credentials, value)
+		}
+	}
+	return credentials
+}
+
+func containsCredential(files []poc.File, credentials []string) bool {
+	for _, file := range files {
+		if modelProxyTokenPattern.MatchString(file.Path) || modelProxyTokenPattern.Match(file.Data) {
+			return true
+		}
+		for _, credential := range credentials {
+			if strings.Contains(file.Path, credential) || bytes.Contains(file.Data, []byte(credential)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func redactCredentials(err error, credentials []string) error {
+	text := modelProxyTokenPattern.ReplaceAllString(err.Error(), "[redacted]")
+	for _, credential := range credentials {
+		text = strings.ReplaceAll(text, credential, "[redacted]")
+	}
+	if text == err.Error() {
 		return err
 	}
-	return replaceWorkspaceFile(workRoot, "poc-manifest.json", data)
+	return errors.New(text)
 }

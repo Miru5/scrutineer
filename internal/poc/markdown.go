@@ -2,7 +2,6 @@ package poc
 
 import (
 	"fmt"
-	"io/fs"
 	"regexp"
 	"strings"
 
@@ -10,7 +9,6 @@ import (
 	"github.com/yuin/goldmark/text"
 )
 
-var pocPathChars = regexp.MustCompile(`^[a-zA-Z0-9_./-]+$`)
 var pocLanguage = regexp.MustCompile(`^[a-zA-Z0-9_+.-]+$`)
 var fileHeader = regexp.MustCompile(`^---[ \t]+\S.*[ \t]+---$`)
 
@@ -133,18 +131,7 @@ func validateNames(blocks []Block) error {
 }
 
 func validPoCFilename(name string) bool {
-	if !fs.ValidPath(name) || name == "." || !pocPathChars.MatchString(name) {
-		return false
-	}
-	if strings.EqualFold(name, "run.sh") && name != "run.sh" {
-		return false
-	}
-	for _, part := range strings.Split(name, "/") {
-		if strings.HasSuffix(part, ".") {
-			return false
-		}
-	}
-	return true
+	return ValidPath(name) && (name == "run.sh" || !strings.EqualFold(name, "run.sh"))
 }
 
 func NameConflict(used map[string]bool, name string) bool {

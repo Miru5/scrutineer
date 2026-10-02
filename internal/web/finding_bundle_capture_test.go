@@ -38,7 +38,7 @@ func TestStreamedCaptureFailureReturnsFindingAndEnqueuesTriage(t *testing.T) {
 		}
 		body := `{"id":"F1","title":"capture retry","severity":"High","location":"parser.go:1"}`
 		r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/repositories/%d/findings", repo.ID), strings.NewReader(body))
-		r.Host = testHost
+		asOperator(r)
 		r.Header.Set("Authorization", "Bearer "+scan.APIToken)
 		w := httptest.NewRecorder()
 		s.Handler().ServeHTTP(w, r)
@@ -93,7 +93,7 @@ func TestStreamedPoCBundleUsesCapturedBytes(t *testing.T) {
 	}
 	body := `{"id":"F1","title":"captured bug","severity":"Low","location":"parser.go:1","validation":"prose has no reproduction"}`
 	r := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/repositories/%d/findings", repo.ID), strings.NewReader(body))
-	r.Host = testHost
+	asOperator(r)
 	r.Header.Set("Authorization", "Bearer "+scan.APIToken)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
@@ -111,7 +111,7 @@ func TestStreamedPoCBundleUsesCapturedBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 	r = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/findings/%d/bundle.tar.gz", finding.ID), nil)
-	r.Host = testHost
+	asOperator(r)
 	w = httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
@@ -145,10 +145,97 @@ func TestFindingBundleRejectsCorruptCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/findings/%d/bundle.tar.gz", finding.ID), nil)
-	r.Host = testHost
+	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "captured PoC") {
 		t.Fatalf("corrupt capture response=%d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestStreamedCaptureRejectsScanToken(t *testing.T) {
+	for _, kind := range []string{"context", "binary", "filename", "invalid filename", "host credential", "proxy token"} {
+		t.Run(kind, func(t *testing.T) {
+			s, done := newTestServer(t)
+			defer done()
+			repo, scan := seedRunningScan(t, s)
+			s.Worker.DataDir = t.TempDir()
+			root := filepath.Join(s.Worker.DataDir, fmt.Sprintf("scan-%d", scan.ID))
+			dir := filepath.Join(root, "poc", "F1")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			name, data, secret := credentialPoCTestFile(t, kind, scan.APIToken)
+			path := filepath.Join(dir, name)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			url := fmt.Sprintf("/api/repositories/%d/findings", repo.ID)
+			body := `{"id":"F1","title":"credential capture","severity":"High","location":"parser.go:1"}`
+			response := apiReq(t, s, http.MethodPost, url, scan.APIToken, body)
+			if response.Code != http.StatusCreated || !strings.Contains(response.Body.String(), "poc_capture_error") || strings.Contains(response.Body.String(), secret) {
+				t.Fatalf("unsafe capture response=%d: %s", response.Code, response.Body.String())
+			}
+			var finding db.Finding
+			if err := s.DB.First(&finding).Error; err != nil {
+				t.Fatal(err)
+			}
+			row, err := db.LoadFindingPoC(s.DB, finding.ID)
+			if err != nil || row != nil {
+				t.Fatalf("credential capture persisted: row=%v, err=%v", row != nil, err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("safe reproduction"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			response = apiReq(t, s, http.MethodPost, url, scan.APIToken, body)
+			if response.Code != http.StatusCreated || strings.Contains(response.Body.String(), "poc_capture_error") {
+				t.Fatalf("repaired capture response=%d: %s", response.Code, response.Body.String())
+			}
+			assertRepairedBundleHasNoToken(t, s, finding.ID, secret)
+		})
+	}
+}
+
+func credentialPoCTestFile(t *testing.T, kind, token string) (name string, data []byte, secret string) {
+	t.Helper()
+	switch kind {
+	case "binary":
+		return "payload.bin", append(append([]byte{0, 255}, token...), 0, 255), token
+	case "filename":
+		return token + ".txt", []byte("example"), token
+	case "invalid filename":
+		return token + "+.txt", []byte("example"), token
+	case "host credential":
+		key := "sk-ant-test-" + strings.Repeat("k", 24)
+		t.Setenv("ANTHROPIC_API_KEY", key)
+		return "env.txt", []byte("ANTHROPIC_API_KEY=" + key), key
+	case "proxy token":
+		proxy := "scrutineer-scan-" + strings.Repeat("ab", 32)
+		return "env.txt", []byte("ANTHROPIC_API_KEY=" + proxy), proxy
+	default:
+		return "README.md", []byte(fmt.Sprintf(`{"scrutineer":{"token":%q}}`, token)), token
+	}
+}
+
+func assertRepairedBundleHasNoToken(t *testing.T, s *Server, findingID uint, token string) {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/findings/%d/bundle.tar.gz", findingID), nil)
+	asOperator(request)
+	bundle := httptest.NewRecorder()
+	s.Handler().ServeHTTP(bundle, request)
+	if bundle.Code != http.StatusOK {
+		t.Fatalf("bundle response=%d: %s", bundle.Code, bundle.Body.String())
+	}
+	files := readArchive(t, bundle.Body.Bytes())
+	if string(files["poc/README.md"]) != "safe reproduction" {
+		t.Fatal("bundle did not include repaired capture")
+	}
+	for path, data := range files {
+		if strings.Contains(path, token) || bytes.Contains(data, []byte(token)) {
+			t.Fatal("bundle contains scan token")
+		}
 	}
 }
