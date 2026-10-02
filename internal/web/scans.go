@@ -13,6 +13,7 @@ import (
 
 	"scrutineer/internal/coverage"
 	"scrutineer/internal/db"
+	"scrutineer/internal/fleet"
 	"scrutineer/internal/worker"
 
 	"gorm.io/gorm"
@@ -435,8 +436,11 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 	}
 	skillFilter := parseScanSkillFilter(r.URL.Query().Get("skill"))
 	repoID, _ := strconv.Atoi(r.URL.Query().Get("repository"))
-	q := skillFilter.apply(s.DB.Model(&db.Scan{}).
-		Where("status = ? AND kind = ? AND skill_id IS NOT NULL", db.ScanFailed, worker.JobSkill))
+	// fleet: scoped — a retry re-enqueues onto this instance's queue partition,
+	// so retrying a teammate's failure would run their scan under this member's
+	// model account and attribute it here.
+	q := skillFilter.apply(fleet.ScopeOwn(s.DB.Model(&db.Scan{}).
+		Where("status = ? AND kind = ? AND skill_id IS NOT NULL", db.ScanFailed, worker.JobSkill)))
 	q = applyScanCompletenessFilter(q, completeness)
 	group := r.URL.Query().Get("group")
 	if group != "" {
@@ -536,7 +540,9 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) scansPauseQueued(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
-	changed, err := updateScansWithAudit(s.DB.Where("status = ?", db.ScanQueued), scanStatusUpdates(
+	// fleet: scoped. Unscoped on a shared database this button, which looks
+	// local, would stop every other member's queued work.
+	changed, err := updateScansWithAudit(fleet.ScopeOwn(s.DB.Where("status = ?", db.ScanQueued)), scanStatusUpdates(
 		db.ScanPaused,
 		"paused by user",
 		&now,
@@ -574,9 +580,9 @@ func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
 		// Opted-out repositories are excluded from both the read and the claim:
 		// recording an opt-out cancels the paused scans it finds, but a scan the
 		// worker pauses while that sweep runs would otherwise stay resumable.
-		if err := tx.Select("id", "repository_id", "kind", "finding_id", "error", "paused_until").
+		if err := fleet.ScopeOwn(tx.Select("id", "repository_id", "kind", "finding_id", "error", "paused_until").
 			Where("status = ?", db.ScanPaused).
-			Where("repository_id NOT IN (?)", s.optedOutRepoIDs()).
+			Where("repository_id NOT IN (?)", s.optedOutRepoIDs())).
 			Find(&paused).Error; err != nil {
 			return err
 		}
@@ -589,10 +595,12 @@ func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
 			byID[scan.ID] = scan
 		}
 		var claimed []db.Scan
-		res := tx.Model(&claimed).Clauses(clause.Returning{
+		// fleet: the claim is scoped for the same reason the read is — resuming
+		// a teammate's paused scan would queue it on this instance's partition.
+		res := fleet.ScopeOwn(tx.Model(&claimed).Clauses(clause.Returning{
 			Columns: []clause.Column{{Name: "id"}},
 		}).Where("status = ?", db.ScanPaused).
-			Where("repository_id NOT IN (?)", s.optedOutRepoIDs()).
+			Where("repository_id NOT IN (?)", s.optedOutRepoIDs())).
 			Updates(scanStatusUpdates(db.ScanQueued, "", nil, nil))
 		if res.Error != nil {
 			return res.Error

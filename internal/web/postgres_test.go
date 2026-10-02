@@ -43,7 +43,7 @@ func testDatabaseWeb(t *testing.T, gdb *gorm.DB, dialect queue.Dialect) {
 	}
 	t.Cleanup(func() { _ = sqldb.Close() })
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	q, err := queue.New(sqldb, log, 1, dialect)
+	q, err := queue.New(sqldb, log, 1, dialect, "")
 	if err != nil {
 		t.Fatal(err)
 	}

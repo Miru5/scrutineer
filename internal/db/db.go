@@ -224,6 +224,14 @@ type Scan struct {
 	RepositoryID uint `gorm:"index;not null"`
 	Repository   Repository
 
+	// fleet: the instance that created this scan, stamped by the create
+	// callback internal/fleet installs. It is what stops one instance's
+	// restart, cancel or retry from touching another's work, and what makes
+	// "whose scan is this" answerable in the fleet views. Empty on a
+	// single-instance deployment, and on every row written before the
+	// shared-database layer existed (fleet.Install backfills those).
+	Instance string `gorm:"index"`
+
 	Kind   string     `gorm:"index;not null"`
 	Status ScanStatus `gorm:"index;not null"`
 	Model  string

@@ -32,10 +32,10 @@ func TestPostgresQueue(t *testing.T) {
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	// Build twice: the second New re-runs the schema, asserting idempotency.
-	if _, err := New(sqldb, log, 1, Postgres); err != nil {
+	if _, err := New(sqldb, log, 1, Postgres, ""); err != nil {
 		t.Fatalf("first New: %v", err)
 	}
-	q, err := New(sqldb, log, 1, Postgres)
+	q, err := New(sqldb, log, 1, Postgres, "")
 	if err != nil {
 		t.Fatalf("second New (idempotency): %v", err)
 	}
@@ -99,7 +99,7 @@ func TestPostgresQueueSchemaOnlyRole(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = restricted.Close() }()
-	if _, err := New(restricted, slog.New(slog.NewTextHandler(io.Discard, nil)), 1, Postgres); err != nil {
+	if _, err := New(restricted, slog.New(slog.NewTextHandler(io.Discard, nil)), 1, Postgres, ""); err != nil {
 		t.Fatalf("New as schema-only role: %v", err)
 	}
 }

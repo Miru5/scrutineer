@@ -91,16 +91,24 @@ const (
 // DefaultWorkerConcurrency. The runner itself is built lazily in Start (and
 // rebuilt by Reconfigure). Both embedded schemas are idempotent, so running
 // them on every startup is safe.
-func New(sqldb *sql.DB, log *slog.Logger, concurrency int, dialect Dialect) (*Queue, error) {
+func New(sqldb *sql.DB, log *slog.Logger, concurrency int, dialect Dialect, name string) (*Queue, error) {
 	if concurrency <= 0 {
 		concurrency = DefaultWorkerConcurrency
 	}
 	if err := installSchema(sqldb, dialect); err != nil {
 		return nil, fmt.Errorf("goqite schema: %w", err)
 	}
+	// fleet: name is the queue's partition. goqite hands each message to
+	// exactly one consumer, so instances sharing a database must not share a
+	// queue name — see fleet.QueueName, which is what callers pass here. Empty
+	// keeps the historic "scans" name so an existing deployment's queued rows
+	// are still found.
+	if name == "" {
+		name = "scans"
+	}
 	q := goqite.New(goqite.NewOpts{
 		DB:        sqldb,
-		Name:      "scans",
+		Name:      name,
 		Timeout:   visibilityTimeout,
 		SQLFlavor: dialect.goqiteFlavor(),
 	})

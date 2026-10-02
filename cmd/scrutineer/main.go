@@ -34,6 +34,7 @@ import (
 	"scrutineer/internal/config"
 	"scrutineer/internal/db"
 	"scrutineer/internal/egressgrant"
+	"scrutineer/internal/fleet"
 	"scrutineer/internal/interchange"
 	"scrutineer/internal/queue"
 	"scrutineer/internal/skills"
@@ -99,6 +100,7 @@ type flags struct {
 	skillsRepo            string
 	skillsRepoToken       string
 	concurrency           int
+	instance              string
 	cloneMode             string
 	scanTimeout           time.Duration
 	backendPreflightTTL   time.Duration
@@ -253,6 +255,7 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.StringVar(&f.profilesDir, "profiles-dir", "docker/profiles", "directory containing per-ecosystem runner profiles (Dockerfile per profile); empty disables profiles")
 	fs.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills on startup; owner/repo[@ref] or https://host/path[@ref]")
 	fs.IntVar(&f.concurrency, "concurrency", queue.DefaultWorkerConcurrency, "number of scans to run in parallel")
+	fs.StringVar(&f.instance, "instance", "", "this instance's identity among those sharing a database; scopes its scans and its queue partition (see internal/fleet)")
 	fs.StringVar(&f.cloneMode, "clone", "shallow", "clone depth: shallow (--depth 1) or full")
 	fs.DurationVar(&f.scanTimeout, "scan-timeout", worker.DefaultScanTimeout, "wall-clock limit per scan")
 	fs.DurationVar(&f.backendPreflightTTL, "backend-preflight-ttl", 0, "cache lifetime for live backend probes (0 disables; probes consume model tokens)")
@@ -693,6 +696,12 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
 	}
+	// fleet: join the shared database as a named instance. Registers the scan
+	// owner stamp and backfills rows written before the layer existed. With no
+	// -instance this is single-instance behaviour, unchanged.
+	if err := fleet.Install(gdb, f.instance); err != nil {
+		return err
+	}
 	db.BackfillFindings(gdb)
 	db.BackfillFindingRepository(gdb)
 	if err := db.BackfillFindingFingerprints(gdb); err != nil {
@@ -703,7 +712,8 @@ func run(log *slog.Logger) error {
 	if err := db.SeedDefaultLabels(gdb); err != nil {
 		return fmt.Errorf("seed labels: %w", err)
 	}
-	if err := db.SweepRunning(gdb); err != nil {
+	// fleet: scoped to this instance; see fleet.SweepRunning.
+	if err := fleet.SweepRunning(gdb); err != nil {
 		return fmt.Errorf("sweep: %w", err)
 	}
 	sqldb, err := gdb.DB()
@@ -721,7 +731,8 @@ func run(log *slog.Logger) error {
 	}
 	enforceCodexAccountAuthConcurrency(f, log)
 
-	q, err := queue.New(sqldb, log, f.concurrency, f.queueDialect())
+	// fleet: a per-instance queue partition, so a runner only dequeues its own work.
+	q, err := queue.New(sqldb, log, f.concurrency, f.queueDialect(), fleet.QueueName("scans"))
 	if err != nil {
 		return fmt.Errorf("queue: %w", err)
 	}
