@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"runtime/debug"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,29 +39,6 @@ import (
 	"scrutineer/internal/worker"
 	bundledskills "scrutineer/skills"
 )
-
-// commit is the git SHA scrutineer was built from, injected at build time
-// via -ldflags "-X main.commit=...". Empty in a plain `go build`/`go run`,
-// where buildCommit falls back to the VCS revision in the build info.
-var commit string
-
-// buildCommit reports the commit scrutineer was built from. It prefers the
-// ldflags-injected value (set in the container image build, where .git is excluded
-// from the context so the VCS stamp is unavailable) and otherwise reads the
-// vcs.revision the Go toolchain records during a normal local build.
-func buildCommit() string {
-	if commit != "" {
-		return commit
-	}
-	if info, ok := debug.ReadBuildInfo(); ok {
-		for _, s := range info.Settings {
-			if s.Key == "vcs.revision" {
-				return s.Value
-			}
-		}
-	}
-	return ""
-}
 
 // skillDirs collects repeated -skills flags.
 type skillDirs []string
@@ -777,6 +753,9 @@ func run(log *slog.Logger) error {
 	srv.SkillsRepoSHA = skillsRepoSHA
 	srv.ModelProxy = worker.ModelProxyOf(runner)
 	srv.Version = version
+	build := readBuildMetadata()
+	srv.Commit = build.Commit
+	srv.CommitDate = build.CommitDate
 	wireEcosystems(f.ecosystemsEnrichment, w, srv, gdb, log)
 	if h, err := worker.HarnessByName(f.backend); err == nil {
 		srv.Backend = worker.HarnessName(h)
