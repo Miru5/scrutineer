@@ -36,6 +36,7 @@ type bundleManifest struct {
 	Status       string            `json:"status"`
 	Contents     map[string]string `json:"contents"`
 	Note         string            `json:"note,omitempty"`
+	Warnings     []string          `json:"warnings,omitempty"`
 }
 
 // findingBundleDownload writes a tar.gz containing every per-finding
@@ -169,9 +170,10 @@ func (s *Server) bundleEntriesAt(f *db.Finding, repo *db.Repository, generatedAt
 		contents["patch.diff"] = "Suggested unified diff; applied to commit recorded in the OSV affected[] git range"
 	}
 
+	var warnings []string
 	poc, err := bundlePoC(f.Validation)
 	if err != nil {
-		return nil, fmt.Errorf("build PoC: %w", err)
+		warnings = append(warnings, fmt.Sprintf("poc/ omitted: %v. Original validation is preserved in report.md.", err))
 	}
 	if len(poc) > 0 {
 		entries = append(entries, poc...)
@@ -189,6 +191,7 @@ func (s *Server) bundleEntriesAt(f *db.Finding, repo *db.Repository, generatedAt
 		Aliases:      aliases,
 		Status:       string(f.Status),
 		Contents:     contents,
+		Warnings:     warnings,
 		Note:         "Bundle composed from data already on the finding; the per-file exports are the same bytes the corresponding /findings/{id}/{file} endpoint serves directly.",
 	}
 	manifestRaw, err := json.MarshalIndent(manifest, "", "  ")

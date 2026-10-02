@@ -148,7 +148,7 @@ func bundlePoC(validation string) ([]bundleEntry, error) {
 func parsePoCBlocks(validation string) ([]pocBlock, error) {
 	source := []byte(validation)
 	var blocks []pocBlock
-	err := ast.Walk(md.Parser().Parse(text.NewReader(source)), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
+	err := ast.Walk(pocMarkdown.Parser().Parse(text.NewReader(source)), func(node ast.Node, entering bool) (ast.WalkStatus, error) {
 		fence, ok := node.(*ast.FencedCodeBlock)
 		if !entering || !ok {
 			return ast.WalkContinue, nil

@@ -212,9 +212,65 @@ func TestBundlePoC_noFencedBlocksReturnsNil(t *testing.T) {
 }
 
 func TestBundlePoC_embeddedBackticksPreserved(t *testing.T) {
-	got := pocEntries(t, mustBundlePoC(t, "````sh\nprintf '%s\\n' '```'\n````\n"))
-	if body := string(got["poc/run.sh"].Data); body != "printf '%s\\n' '```'\n" {
-		t.Errorf("run.sh = %q", body)
+	for _, fence := range []string{"````sh", "~~~sh", "```sh filename=run.sh"} {
+		t.Run(fence, func(t *testing.T) {
+			closing, _, _ := strings.Cut(fence, "sh")
+			want := "printf '%s\\n' '```'\n# literal ```\necho done\n"
+			got := pocEntries(t, mustBundlePoC(t, fence+"\n"+want+closing+"\n"))
+			if body := string(got["poc/run.sh"].Data); body != want {
+				t.Errorf("run.sh = %q, want %q", body, want)
+			}
+		})
+	}
+}
+
+func TestFindingBundle_legacyGluedFences(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	f := setUpBundleFinding(t, s, false)
+	validation := "```sh\nprintf 'hi\\n'```\n\nExpected output:\n```text\nhi```\n\n" +
+		"```text filename=inputs/value.txt\nnamed file\n```\n"
+	if err := s.DB.Model(f).Update("validation", validation).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, localReq(http.MethodGet, "/findings/"+strconv.Itoa(int(f.ID))+"/bundle.tar.gz"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	files := readArchive(t, w.Body.Bytes())
+	for name, want := range map[string]string{
+		"poc/run.sh":           "printf 'hi\\n'\n",
+		"poc/transcript.txt":   "hi\n",
+		"poc/inputs/value.txt": "named file\n",
+	} {
+		if string(files[name]) != want {
+			t.Errorf("%s = %q, want %q", name, files[name], want)
+		}
+	}
+	script := filepath.Join(t.TempDir(), "run.sh")
+	if err := os.WriteFile(script, files["poc/run.sh"], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.CommandContext(t.Context(), "sh", script).CombinedOutput()
+	if err != nil || string(output) != "hi\n" {
+		t.Fatalf("downloaded script: %v, output %q", err, output)
+	}
+}
+
+func TestBundlePoC_trailingNewlineNormalised(t *testing.T) {
+	for _, validation := range []string{
+		"```sh\necho hi```",
+		"```sh\necho hi``` \t\r\n",
+		"  ```sh\n  echo hi```\n",
+		"> ```sh\n> echo hi```\n",
+	} {
+		t.Run(validation, func(t *testing.T) {
+			got := pocEntries(t, mustBundlePoC(t, validation))
+			if body := string(got["poc/run.sh"].Data); body != "echo hi\n" {
+				t.Errorf("run.sh = %q", body)
+			}
+		})
 	}
 }
 
@@ -397,18 +453,24 @@ func TestFindingBundle_namedFilesReproduceAndRender(t *testing.T) {
 	}
 }
 
-func TestFindingBundle_rejectsUnsafeOrConflictingFilenames(t *testing.T) {
+func TestFindingBundle_omitsUnsafeOrConflictingPoC(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
-	f := setUpBundleFinding(t, s, false)
+	f := setUpBundleFinding(t, s, true)
+	seedBundleDependent(t, s, f.RepositoryID)
 	cases := []string{
 		"../escape.sh", "/tmp/escape.sh", "dir/../../escape.sh", "dir\\escape.sh",
 		"C:/escape.sh", ".", "", "dir//file.sh", "dir/./file.sh", "../x\x00",
 		"README.md", "README.md/file", "run.sh/file", "RUN.SH", "dir./file", "file name.sh",
 	}
+	validations := make(map[string]string)
 	for _, name := range cases {
+		validations[name] = "```sh filename=" + name + "\necho harmless\n```\n"
+	}
+	validations["duplicate"] = "```sh filename=run.sh\necho one\n```\n\n```sh filename=run.sh\necho two\n```\n"
+	validations["misplaced"] = "```filename=run.sh sh\necho harmless\n```\n"
+	for name, validation := range validations {
 		t.Run(name, func(t *testing.T) {
-			validation := "```sh filename=" + name + "\necho harmless\n```\n"
 			if err := s.DB.Model(f).Update("validation", validation).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -416,10 +478,38 @@ func TestFindingBundle_rejectsUnsafeOrConflictingFilenames(t *testing.T) {
 			r.Host = "127.0.0.1:8080"
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, r)
-			if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "PoC") {
-				t.Errorf("status = %d: %s", w.Code, w.Body.String())
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", w.Code, w.Body.String())
 			}
+			assertBundlePoCOmitted(t, readArchive(t, w.Body.Bytes()), validation)
 		})
+	}
+}
+
+func assertBundlePoCOmitted(t *testing.T, files map[string][]byte, validation string) {
+	t.Helper()
+	for _, name := range []string{"manifest.json", "report.md", "osv.json", "csaf.json", "patch.diff"} {
+		if len(files[name]) == 0 {
+			t.Errorf("bundle missing %s", name)
+		}
+	}
+	for name := range files {
+		if strings.HasPrefix(name, "poc/") {
+			t.Errorf("bundle contains rejected PoC file %s", name)
+		}
+	}
+	if !strings.Contains(string(files["report.md"]), validation) {
+		t.Error("report missing original validation")
+	}
+	var manifest bundleManifest
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := manifest.Contents["poc/"]; ok {
+		t.Error("manifest lists omitted poc/")
+	}
+	if len(manifest.Warnings) != 1 || !strings.Contains(manifest.Warnings[0], "poc/ omitted:") {
+		t.Errorf("manifest warnings = %q", manifest.Warnings)
 	}
 }
 
