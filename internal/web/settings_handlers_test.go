@@ -26,19 +26,18 @@ func postForm(t *testing.T, s *Server, path string, form url.Values) *httptest.R
 
 func TestSettingsShow_buildMetadata(t *testing.T) {
 	const revision = "0123456789abcdef0123456789abcdef01234567"
-	const buildDate = "2026-10-01T07:00:00Z"
 	const commitDate = "2026-09-30T08:59:54Z"
 	for _, tt := range []struct {
 		name       string
+		version    string
 		commit     string
-		buildDate  string
 		commitDate string
 		want       []string
 		absent     []string
 	}{
 		{
-			name: "release", commit: revision, buildDate: buildDate, commitDate: commitDate,
-			want: []string{revision, "Build date", buildDate}, absent: []string{"Commit date", commitDate, "-dirty"},
+			name: "release", version: "release", commit: revision, commitDate: commitDate,
+			want: []string{revision, "Commit date", commitDate}, absent: []string{"Build date", "-dirty"},
 		},
 		{
 			name: "checkout", commit: revision, commitDate: commitDate,
@@ -61,7 +60,10 @@ func TestSettingsShow_buildMetadata(t *testing.T) {
 			s, done := newTestServer(t)
 			defer done()
 			s.Version = "dev"
-			s.Commit, s.BuildDate, s.CommitDate = tt.commit, tt.buildDate, tt.commitDate
+			if tt.version != "" {
+				s.Version = tt.version
+			}
+			s.Commit, s.CommitDate = tt.commit, tt.commitDate
 			w := httptest.NewRecorder()
 			s.Handler().ServeHTTP(w, localReq("GET", "/settings"))
 			if w.Code != http.StatusOK {
@@ -71,7 +73,7 @@ func TestSettingsShow_buildMetadata(t *testing.T) {
 			if !ok {
 				t.Fatal("settings page missing About section")
 			}
-			for _, want := range append(tt.want, "Scrutineer commit", `title="dev">dev</div>`) {
+			for _, want := range append(tt.want, "Scrutineer commit", `title="`+s.Version+`">`+s.Version+`</div>`) {
 				if !strings.Contains(about, want) {
 					t.Errorf("About section missing %q", want)
 				}

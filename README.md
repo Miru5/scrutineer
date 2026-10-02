@@ -41,7 +41,7 @@ The existing source-checkout command remains supported:
 
 Then open http://127.0.0.1:8080. The explicit `-skills ./skills` directory makes the checkout command useful while developing skills because it overrides the copies embedded in the binary. It is optional for ordinary use because Scrutineer ships its built-in skills and per-ecosystem runner profiles inside the executable.
 
-The `-buildvcs=true` flag includes the source commit in `go run` builds. Settings > About shows that commit, with a `-dirty` suffix for local changes, and its commit date when no build date was supplied. Ordinary `go build` commands include this metadata automatically in a Git checkout.
+The `-buildvcs=true` flag includes the source commit in `go run` builds. Settings > About shows that commit, with a `-dirty` suffix for local changes, and its commit date. Ordinary `go build` commands include this metadata automatically in a Git checkout.
 
 You can also build a checkout-independent executable and run it from another directory:
 

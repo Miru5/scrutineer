@@ -125,7 +125,6 @@ func (s *Server) settingsShow(w http.ResponseWriter, r *http.Request) {
 		"WorkDir":          s.Worker.DataDir,
 		"Version":          s.Version,
 		"Commit":           s.Commit,
-		"BuildDate":        s.BuildDate,
 		"CommitDate":       s.CommitDate,
 		"Meta":             meta,
 	})

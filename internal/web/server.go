@@ -106,7 +106,6 @@ type Server struct {
 	// Release builds inject CalVer at link time; development builds use "dev".
 	Version    string
 	Commit     string
-	BuildDate  string
 	CommitDate string
 
 	// MonorepoAttribution mirrors worker.Worker.MonorepoAttribution on the

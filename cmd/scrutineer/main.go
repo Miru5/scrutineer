@@ -756,7 +756,6 @@ func run(log *slog.Logger) error {
 	build := readBuildMetadata()
 	srv.Commit = build.Commit
 	srv.CommitDate = build.CommitDate
-	srv.BuildDate = buildDate
 	wireEcosystems(f.ecosystemsEnrichment, w, srv, gdb, log)
 	if h, err := worker.HarnessByName(f.backend); err == nil {
 		srv.Backend = worker.HarnessName(h)
