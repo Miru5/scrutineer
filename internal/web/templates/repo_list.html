@@ -5,7 +5,27 @@
            autocomplete="off" spellcheck="false">
     <input type="hidden" name="language" value="{{.Language}}">
     <input type="hidden" name="sort" value="{{.Sort}}">
+    <input type="hidden" name="instance" value="{{.Instance}}">
   </form>
+  {{/* fleet: the Instance filter, rendered only when scans carry an instance */}}
+  {{if .Instances}}
+  <div class="dropdown-menu">
+    <button type="button" class="btn-outline" aria-haspopup="menu" aria-expanded="false"{{if .Instance}} aria-label="Instance: {{.Instance}}" title="{{.Instance}}"{{end}}>
+      <i data-lucide="server"></i>
+      {{if .Instance}}{{.Instance}}{{else}}Instance{{end}}
+      <i data-lucide="chevron-down"></i>
+    </button>
+    <div data-popover aria-hidden="true" data-align="end">
+      <div role="menu">
+        <a role="menuitem" href="/?q={{.Q}}&language={{.Language}}&sort={{.Sort}}">All instances</a>
+        {{range .Instances}}
+          <a role="menuitem" href="/?q={{$.Q}}&language={{$.Language}}&sort={{$.Sort}}&instance={{.}}"
+             {{if eq . $.Instance}}aria-current="true"{{end}}>{{.}}{{if eq . $.ThisInstance}} (this instance){{end}}</a>
+        {{end}}
+      </div>
+    </div>
+  </div>
+  {{end}}
   <div class="dropdown-menu">
     <button type="button" class="btn-outline" aria-haspopup="menu" aria-expanded="false">
       <i data-lucide="filter"></i>
@@ -14,9 +34,9 @@
     </button>
     <div data-popover aria-hidden="true" data-align="end">
       <div role="menu">
-        <a role="menuitem" href="/?q={{.Q}}&sort={{.Sort}}">All languages</a>
+        <a role="menuitem" href="/?q={{.Q}}&sort={{.Sort}}{{if .Instance}}&instance={{.Instance}}{{end}}">All languages</a>
         {{range .Languages}}
-          <a role="menuitem" href="/?q={{$.Q}}&language={{.}}&sort={{$.Sort}}"
+          <a role="menuitem" href="/?q={{$.Q}}&language={{.}}&sort={{$.Sort}}{{if $.Instance}}&instance={{$.Instance}}{{end}}"
              {{if eq . $.Language}}aria-current="true"{{end}}>{{.}}</a>
         {{end}}
       </div>
@@ -31,7 +51,7 @@
     <div data-popover aria-hidden="true" data-align="end">
       <div role="menu">
         {{range (list "newest" "findings" "name" "stars" "language")}}
-          <a role="menuitem" href="/?q={{$.Q}}&language={{$.Language}}&sort={{.}}"
+          <a role="menuitem" href="/?q={{$.Q}}&language={{$.Language}}&sort={{.}}{{if $.Instance}}&instance={{$.Instance}}{{end}}"
              {{if eq . (sortkey $.Sort)}}aria-current="true"{{end}}>{{.}}</a>
         {{end}}
       </div>
@@ -44,6 +64,8 @@
       <tr>
         {{template "th-sort" (dict "Sorter" .Sorter "Key" "name" "Def" "asc" "Label" "Repository" "Class" "")}}
         {{template "th-sort" (dict "Sorter" .Sorter "Key" "language" "Def" "asc" "Label" "Language" "Class" "")}}
+        {{/* fleet: which members have scanned this repository */}}
+        {{if .Instances}}<th>Instances</th>{{end}}
         {{template "th-sort" (dict "Sorter" .Sorter "Key" "scanned" "Def" "desc" "Label" "Last scan" "Class" "")}}
         {{template "th-sort" (dict "Sorter" .Sorter "Key" "status" "Def" "asc" "Label" "Status" "Class" "")}}
         <th>Health</th>
@@ -61,6 +83,9 @@
           {{range .Branches}}{{template "branch-tag" .}}{{end}}
         </td>
         <td class="text-muted-foreground">{{if .Languages}}{{.Languages}}{{else}}-{{end}}</td>
+        {{if $.Instances}}
+          <td class="text-xs">{{if .Instances}}{{range .Instances}}<a class="badge-outline" href="/?instance={{.}}" title="{{if eq . $.ThisInstance}}this instance{{else}}another instance on the shared database{{end}}"><i data-lucide="server"></i> {{.}}</a> {{end}}{{else}}<span class="text-muted-foreground">-</span>{{end}}</td>
+        {{end}}
         <td>{{if .LastScan}}<span title="{{.LastScan.CreatedAt.Format "2006-01-02 15:04:05 MST"}}">{{.LastScan.CreatedAt.Format "2006-01-02 15:04"}}</span>{{else}}never{{end}}</td>
         <td>{{if .StatusScan}}{{template "status-badge" (status .StatusScan.Status)}}{{end}}</td>
         <td>{{if .Health}}<span class="badge-outline">{{.Health}}</span>{{else}}-{{end}}</td>

@@ -20,9 +20,14 @@ func TestListPagesQueryCountsStayBounded(t *testing.T) {
 		path string
 		max  int64
 	}{
-		{name: "repositories", path: "/", max: 8},
+		// repositories and scans each carry two fleet lookups beyond the
+		// historical budget: the distinct instance list behind the filter,
+		// and (repositories only) the instances that have scanned each row.
+		// Both are single queries for the whole page — the assertion above,
+		// that the count does not grow with rows, is what matters.
+		{name: "repositories", path: "/", max: 10},
 		{name: "findings", path: "/findings", max: 8},
-		{name: "scans", path: "/scans", max: 6},
+		{name: "scans", path: "/scans", max: 7},
 	}
 
 	for _, tc := range cases {

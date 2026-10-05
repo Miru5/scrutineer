@@ -30,6 +30,10 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 	r = requestWithScanSkillFilter(r, skillFilter.value())
 	q := skillFilter.apply(s.DB.Model(&db.Scan{}))
 	q = applyScanCompletenessFilter(q, completeness)
+	// fleet: reads stay fleet-wide by default; this narrows the list to one
+	// member when the Instance filter is set.
+	instance := strings.TrimSpace(r.URL.Query().Get("instance"))
+	q = fleet.FilterScans(q, instance)
 	status := r.URL.Query().Get(statusKey)
 	if status != "" {
 		q = q.Where("status = ?", status)
@@ -82,8 +86,9 @@ func (s *Server) jobs(w http.ResponseWriter, r *http.Request) {
 		"Skill": skillFilter.value(), "SkillLabel": skillFilter.label(),
 		"Status": status, "Sort": sort, "Skills": skillNames,
 		"Completeness": completeness,
-		"Group":        group,
-		"AnySubPath":   anySubPath, "AnyFocusArea": anyFocusArea,
+		"Instance":     instance, "Instances": fleet.Instances(s.DB), "ThisInstance": fleet.Name(),
+		"Group":      group,
+		"AnySubPath": anySubPath, "AnyFocusArea": anyFocusArea,
 		"QueuedCount": stats.QueuedCount, "PausedCount": stats.PausedCount,
 		"AccountPausedCount": stats.AccountPausedCount,
 		"NextAccountResume":  stats.NextAccountResume,

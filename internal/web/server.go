@@ -29,6 +29,7 @@ import (
 	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/fleet"
 	"scrutineer/internal/queue"
 	"scrutineer/internal/repoconfig"
 	"scrutineer/internal/vince"
@@ -875,6 +876,11 @@ type repoRow struct {
 	// scanned on, for the branch tags next to its name. Empty when every
 	// scan ran on the default branch.
 	Branches []string
+	// Instances lists the fleet instances that have scanned this repo, for
+	// the Instances column on a shared database. Repositories carry no
+	// owner of their own — any member may add or scan one — so "whose" is
+	// answered from the scans. Empty on a single-instance deployment.
+	Instances []string
 }
 
 // distinctLanguages returns the sorted set of individual language names
@@ -915,6 +921,12 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 		q = q.Where("LOWER(name) LIKE LOWER(?) OR LOWER(url) LIKE LOWER(?) OR LOWER(full_name) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?)",
 			like, like, like, like)
 	}
+	// Repositories with at least one scan by the given instance. Membership
+	// is by scan, not by who added the row: on a shared database the row is
+	// everyone's, the scans are somebody's.
+	// fleet: narrow the list to the repositories one member has scanned.
+	instance := strings.TrimSpace(r.URL.Query().Get("instance"))
+	q = fleet.FilterRepos(q, instance)
 
 	sortCol, dir := splitSort(r.URL.Query().Get("sort"))
 	const nameSort = "name"
@@ -1049,6 +1061,8 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 			branchesByRepo[rr.RepositoryID] = append(branchesByRepo[rr.RepositoryID], rr.Ref)
 		}
 	}
+	// fleet: which members have scanned each repository, for the Instances column.
+	instancesByRepo := fleet.InstancesByRepo(s.DB, repoIDs)
 
 	rows := make([]repoRow, 0, len(repos))
 	for _, repo := range repos {
@@ -1058,13 +1072,15 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 			StatusScan:     statusScans[repo.ID],
 			FindingsTotal:  findingCounts[repo.ID],
 			Branches:       branchesByRepo[repo.ID],
+			Instances:      instancesByRepo[repo.ID],
 		})
 	}
 	languages := distinctLanguages(s.DB)
 
 	data := map[string]any{
 		"Rows": rows, "Page": page, "Language": lang, "Sort": sort, "Languages": languages,
-		"Q": search,
+		"Q":        search,
+		"Instance": instance, "Instances": fleet.Instances(s.DB), "ThisInstance": fleet.Name(),
 	}
 	if isHX(r) {
 		s.render(w, r, "repo_list.html", data)
@@ -2643,7 +2659,7 @@ func loadRepoLatestScans(gdb *gorm.DB, repoID uint) []db.Scan {
 // projection ever falls behind the template.
 const scanRowColumns = `s.id, s.repository_id, s.skill_id, s.skill_name, s.kind, s.ref,
 	s.sub_path, s.focus_area, s.scan_group, s.rescan_mode, s.status, s.max_turns_hit, s.refusal_audit_warning,
-	s.findings_count, s.model, s.cost_usd, s."commit", s.started_at, s.finished_at`
+	s.findings_count, s.model, s.cost_usd, s."commit", s.started_at, s.finished_at, s.instance`
 
 // loadRepoLatestScanRows is loadRepoLatestScans projected down to what the Scans
 // table renders. The repo page itself still needs whole rows (repoPrimaryScans
@@ -3570,6 +3586,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	msgID, err := s.Queue.Enqueue(ctx, kind, scan.ID, prio)
 	if err != nil {
 		return 0, s.scanEnqueueFailure(scan, err, opts.AuditRetry)
+	}
+	if err := db.RecordQueueMessage(s.DB, scan.ID, msgID); err != nil {
+		s.Log.Warn("record queue message", "scan", scan.ID, "err", err)
 	}
 	if err := db.RecordQueueMessage(s.DB, scan.ID, msgID); err != nil {
 		s.Log.Warn("record queue message", "scan", scan.ID, "err", err)

@@ -11,6 +11,7 @@ import (
 
 	"scrutineer/internal/config"
 	"scrutineer/internal/db"
+	"scrutineer/internal/fleet"
 	"scrutineer/internal/worker"
 )
 
@@ -317,7 +318,11 @@ func (s *Server) settingsUpdateConcurrency(w http.ResponseWriter, r *http.Reques
 	// With nothing running there's nothing to lose, so apply immediately;
 	// otherwise ask before cancelling.
 	var running int64
-	s.DB.Model(&db.Scan{}).Where("status = ?", db.ScanRunning).Count(&running)
+	// This badge sits next to this instance's queue controls, so it counts
+	// this instance's work. A fleet-wide number here would read as "you have
+	// nine scans running" when eight of them are someone else's and none of
+	// the adjacent buttons can touch them.
+	fleet.ScopeOwn(s.DB.Model(&db.Scan{}).Where("status = ?", db.ScanRunning)).Count(&running)
 	if running == 0 {
 		s.Queue.Reconfigure(n)
 		setFlash(w, Flash{Category: successKey, Title: "Concurrency applied", Description: fmt.Sprintf("Runner now runs %d scans in parallel.", s.Queue.Concurrency())})

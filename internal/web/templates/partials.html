@@ -34,6 +34,11 @@
      Class (th classes). The active column shows a solid direction chevron and
      aria-sort for assistive tech; every other sortable column shows a faded
      up/down chevron so the affordance is visible before any click. */}}
+{{/* instance-badge names the fleet instance a scan belongs to, linking to the
+     scans index filtered on it. Renders nothing for the empty instance a
+     single-instance deployment stamps, so the badge is self-hiding there. */}}
+{{define "instance-badge"}}{{if .}}<a class="badge-outline" href="/scans?instance={{.}}" title="instance {{.}}"><i data-lucide="server"></i> {{.}}</a>{{end}}{{end}}
+
 {{define "th-sort"}}
 {{- $d := .Sorter.Dir .Key .Def -}}
 <th class="{{.Class}}"{{if eq $d "asc"}} aria-sort="ascending"{{else if eq $d "desc"}} aria-sort="descending"{{end}}><a class="th-sort" href="{{.Sorter.URL .Key .Def}}">{{.Label}}
