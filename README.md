@@ -268,6 +268,8 @@ Or with a Claude Code OAuth token instead of an API key:
 
 For codex or opencode, pass `-e CODEX_API_KEY=...` / `-e OPENAI_API_KEY=...` (or `ANTHROPIC_API_KEY` for opencode with an Anthropic model) and add `-backend codex` / `-backend opencode` to the command. For copilot, pass `-e GH_TOKEN=...` (a fine-grained PAT or `gh auth token` value; classic `ghp_` PATs are rejected by Copilot CLI) and add `-backend copilot`.
 
+To run a long-lived instance from a clone instead of the image — a systemd unit, where credentials go, and what a restart costs — see [docs/service.md](docs/service.md).
+
 Always bind to `127.0.0.1`: the UI has no authentication, so binding to `0.0.0.0` exposes your findings database to anyone on the network.
 
 If a container runtime (docker, rootless podman, or Apple's `container`) is available on the host, scrutineer runs each scan in an ephemeral container for isolation. The runner image is published to GHCR as a multi-arch manifest (`linux/amd64` and `linux/arm64`) and pulled automatically on first use:

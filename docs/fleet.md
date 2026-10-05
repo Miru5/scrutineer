@@ -37,6 +37,9 @@ as their own.
 Nothing else differs between members. They run the same binary and the same
 skills, and each keeps its own `-data` directory, model token and concurrency.
 
+For keeping an instance running across reboots, and what a restart costs a
+fleet member, see [service.md](service.md).
+
 ## What is shared and what is yours
 
 The rule is **reads are fleet-wide, writes are scoped**: seeing that a teammate
