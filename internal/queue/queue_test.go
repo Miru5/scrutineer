@@ -35,7 +35,7 @@ func TestQueue_ReconfigureConcurrentShutdown(t *testing.T) {
 			started <- struct{}{}
 			return nil
 		})
-		if err := q.Enqueue(ctx, "job", 1, 0); err != nil {
+		if _, err := q.Enqueue(ctx, "job", 1, 0); err != nil {
 			t.Fatal(err)
 		}
 		done := make(chan struct{})
@@ -106,7 +106,7 @@ func TestQueue_ReconfigureDuringShutdown(t *testing.T) {
 
 	startReturned := make(chan struct{})
 	go func() { q.Start(ctx); close(startReturned) }()
-	if err := q.Enqueue(ctx, "job", 1, 0); err != nil {
+	if _, err := q.Enqueue(ctx, "job", 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	waitChan(t, started, "runner never started")
@@ -149,7 +149,7 @@ func TestQueue_ReconfigureLive(t *testing.T) {
 	ctx := t.Context()
 	go q.Start(ctx)
 
-	if err := q.Enqueue(ctx, "job", 1, 0); err != nil {
+	if _, err := q.Enqueue(ctx, "job", 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	waitChan(t, started, "in-flight job never started")
@@ -160,7 +160,7 @@ func TestQueue_ReconfigureLive(t *testing.T) {
 		t.Errorf("concurrency after Reconfigure = %d, want 3", q.Concurrency())
 	}
 
-	if err := q.Enqueue(ctx, "job", 2, 0); err != nil {
+	if _, err := q.Enqueue(ctx, "job", 2, 0); err != nil {
 		t.Fatal(err)
 	}
 	select {

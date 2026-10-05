@@ -684,7 +684,7 @@ func TestStageSkill_writesMarkdownAndSchema(t *testing.T) {
 		SchemaJSON:  `{"x":1}`,
 		Source:      "ui",
 	}
-	if err := stageSkill(skill, work, dir); err != nil {
+	if err := stageSkill(skill, work, dir, nil); err != nil {
 		t.Fatal(err)
 	}
 	md, err := os.ReadFile(filepath.Join(dir, "SKILL.md"))
@@ -733,7 +733,7 @@ func TestStageSkill_mirrorsScriptsToWorkRoot(t *testing.T) {
 
 	work := t.TempDir()
 	skill := &db.Skill{Name: "s", Description: "d", Body: "body", SourcePath: src, Source: "disk"}
-	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s")); err != nil {
+	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s"), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -770,7 +770,7 @@ func TestStageSkill_remirrorClearsStaleScripts(t *testing.T) {
 
 	work := t.TempDir()
 	skill := &db.Skill{Name: "s", Description: "d", Body: "body", SourcePath: src, Source: "disk"}
-	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s")); err != nil {
+	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s"), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -783,7 +783,7 @@ func TestStageSkill_remirrorClearsStaleScripts(t *testing.T) {
 	if err := os.Symlink("does-not-exist", filepath.Join(src, "scripts", "dangling")); err != nil {
 		t.Fatal(err)
 	}
-	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s")); err != nil {
+	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s"), nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -813,8 +813,61 @@ func TestStageSkill_noScriptsDirIsNoop(t *testing.T) {
 	}
 	work := t.TempDir()
 	skill := &db.Skill{Name: "s", Description: "d", Body: "body", SourcePath: src, Source: "disk"}
-	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s")); err != nil {
+	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s"), nil); err != nil {
 		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "scripts")); !os.IsNotExist(err) {
+		t.Errorf("expected no scripts/ dir at work root, got err=%v", err)
+	}
+}
+
+func TestStageSkill_foreignSourcePathResolvesLocally(t *testing.T) {
+	// On a shared database the skill row's SourcePath is whatever directory
+	// the instance that last upserted it loaded from — another VM's
+	// checkout. Staging must find the skill under this instance's own
+	// -skills directories by name instead of failing on the foreign path.
+	local := t.TempDir()
+	src := filepath.Join(local, "s")
+	if err := os.MkdirAll(filepath.Join(src, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "SKILL.md"), []byte("# placeholder\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "scripts", "run.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(t.TempDir(), "other-vm", "scrutineer-pg", "skills", "s")
+
+	work := t.TempDir()
+	skill := &db.Skill{Name: "s", Description: "d", Body: "body", SourcePath: foreign, Source: "local"}
+	if err := stageSkill(skill, work, filepath.Join(work, ".claude", "skills", "s"), []string{local}); err != nil {
+		t.Fatalf("foreign SourcePath with a local copy must stage, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "scripts", "run.sh")); err != nil {
+		t.Errorf("scripts not mirrored from the local skill dir: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, ".claude", "skills", "s", "scripts", "run.sh")); err != nil {
+		t.Errorf("aux files not copied from the local skill dir: %v", err)
+	}
+}
+
+func TestStageSkill_foreignSourcePathWithoutLocalCopyStagesRowOnly(t *testing.T) {
+	// No local directory carries the skill and the row's path is not on this
+	// host: SKILL.md and schema.json from the row are still staged, and the
+	// scan is not failed for supplementary files this host cannot have.
+	foreign := filepath.Join(t.TempDir(), "other-vm", "skills", "s")
+	work := t.TempDir()
+	dir := filepath.Join(work, ".claude", "skills", "s")
+	skill := &db.Skill{Name: "s", Description: "d", Body: "body", SchemaJSON: `{"x":1}`, SourcePath: foreign, Source: "local"}
+	if err := stageSkill(skill, work, dir, []string{t.TempDir()}); err != nil {
+		t.Fatalf("foreign SourcePath without a local copy must not fail, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
+		t.Errorf("SKILL.md not staged: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(work, "schema.json")); err != nil {
+		t.Errorf("schema.json not staged at work root: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(work, "scripts")); !os.IsNotExist(err) {
 		t.Errorf("expected no scripts/ dir at work root, got err=%v", err)

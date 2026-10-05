@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/fleet"
 	"scrutineer/internal/repoconfig"
 )
 
@@ -19,6 +20,24 @@ import (
 func (s *Server) autoEnqueueFocusAreaDeepDives(scan *db.Scan) {
 	if scan == nil || scan.SkillName != threatModelSkillName ||
 		(scan.Status != db.ScanDone && scan.Status != db.ScanFailed) {
+		return
+	}
+	// Only the owning instance fans a threat-model out. This hook fires on
+	// whichever worker finalized the scan, and on a shared database that need
+	// not be the instance whose web UI enqueued it — so without this check a
+	// runner creates deep-dive rows against another member's repositories,
+	// stamped with its own identity (BeforeCreate) and, because
+	// enqueueFocusAreaDeepDive deliberately sends no Model, resolving the
+	// skill's `max` tier through its own settings rather than the owner's.
+	// Observed 2026-09-25: one member's failed threat-models produced 19
+	// children on another member's instance, on that member's model, across
+	// repositories they do not own.
+	//
+	// The same rule the rest of the app follows — reads stay fleet-wide,
+	// writes get scoped (see db.ScopeOwn). Skipping rather than deferring is
+	// right: the owning instance runs this hook itself when it finalizes the
+	// scan, so the fan-out is not lost, only left to whoever owns it.
+	if !fleet.Owns(scan.Instance) {
 		return
 	}
 

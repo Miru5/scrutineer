@@ -40,7 +40,7 @@ func TestPostgresQueue(t *testing.T) {
 		t.Fatalf("second New (idempotency): %v", err)
 	}
 
-	if err := q.Enqueue(context.Background(), "test-job", 42, 0); err != nil {
+	if _, err := q.Enqueue(context.Background(), "test-job", 42, 0); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

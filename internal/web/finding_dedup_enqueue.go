@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/fleet"
 )
 
 // findingDedupSkillName is the repository-scoped pass that compares open
@@ -60,6 +61,15 @@ func (s *Server) autoEnqueueFindingDedup(scan *db.Scan) {
 	// purely to diff fingerprints; its findings are validation scratch, not a
 	// repo's working set, so they must not trigger a dedup pass.
 	if scan == nil || scan.BaselineScanID != nil {
+		return
+	}
+	// Only the owning instance follows up. The group-settlement path can
+	// hand this hook another member's scan: the fleet-wide reaper
+	// (worker.ReapAbandonedScans) settles the cohort of a scan it fails
+	// wherever that scan ran. Without this check the dedup pass would be
+	// enqueued here, against their repository, under this member's account.
+	// Same rule as autoEnqueueFocusAreaDeepDives: writes stay scoped.
+	if !fleet.Owns(scan.Instance) {
 		return
 	}
 

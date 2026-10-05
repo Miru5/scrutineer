@@ -243,25 +243,36 @@ func (q *Queue) Reconfigure(concurrency int) {
 
 // Enqueue puts a job on the queue. Higher priority is received first; use 0
 // for long-running scans and >0 for quick housekeeping that should jump them.
-func (q *Queue) Enqueue(ctx context.Context, jobName string, scanID uint, priority int) error {
+func (q *Queue) Enqueue(ctx context.Context, jobName string, scanID uint, priority int) (string, error) {
 	body, err := json.Marshal(Payload{ScanID: scanID})
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = jobs.Create(ctx, q.q, jobName, goqite.Message{Body: body, Priority: priority})
-	return err
+	id, err := jobs.Create(ctx, q.q, jobName, goqite.Message{Body: body, Priority: priority})
+	return string(id), err
 }
 
 // EnqueueRetry re-puts a job on the queue with an attempt count and a delay
 // before it becomes visible. Used by the prereq gate to back off a scan
 // whose upstream skills have not yet completed.
-func (q *Queue) EnqueueRetry(ctx context.Context, jobName string, scanID uint, priority, attempt int, delay time.Duration) error {
+func (q *Queue) EnqueueRetry(ctx context.Context, jobName string, scanID uint, priority, attempt int, delay time.Duration) (string, error) {
 	body, err := json.Marshal(Payload{ScanID: scanID, Attempt: attempt})
 	if err != nil {
-		return err
+		return "", err
 	}
-	_, err = jobs.Create(ctx, q.q, jobName, goqite.Message{Body: body, Priority: priority, Delay: delay})
-	return err
+	id, err := jobs.Create(ctx, q.q, jobName, goqite.Message{Body: body, Priority: priority, Delay: delay})
+	return string(id), err
+}
+
+// Remove deletes a queued message by the id Enqueue returned. Cancelling a
+// scan only flips its row; without this the message stays on the queue and is
+// handed to this instance's worker later, which then has to recognise and
+// discard a job whose scan is no longer queued.
+func (q *Queue) Remove(ctx context.Context, id string) error {
+	if id == "" {
+		return nil
+	}
+	return q.q.Delete(ctx, goqite.ID(id))
 }
 
 // slogAdapter satisfies goqite's logger interface using slog.

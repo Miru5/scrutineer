@@ -194,6 +194,11 @@ type Config struct {
 	// historical behaviour). Set driver: postgres with a dsn to point at an
 	// external PostgreSQL server instead.
 	Database DatabaseConfig `yaml:"database"`
+	// Instance is this deployment's identity among those sharing one
+	// database: it scopes the scans it owns and its queue partition. Empty
+	// is a single-instance deployment. Required with driver: postgres —
+	// see cmd/scrutineer's check. Equivalent to -instance.
+	Instance string `yaml:"instance"`
 	// FederationSalt is the secret shared out of band between federation
 	// members and mixed into interchange finding hashes, so members derive
 	// matching hashes without publishing anything enumerable by outsiders.

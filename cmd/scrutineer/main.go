@@ -101,6 +101,8 @@ type flags struct {
 	skillsRepoToken       string
 	concurrency           int
 	instance              string
+	autoRetryMax          int
+	autoRetryDelay        time.Duration
 	cloneMode             string
 	scanTimeout           time.Duration
 	backendPreflightTTL   time.Duration
@@ -256,6 +258,8 @@ func registerFlags(fs *flag.FlagSet, f *flags) {
 	fs.StringVar(&f.skillsRepo, "skills-repo", "", "clone skills on startup; owner/repo[@ref] or https://host/path[@ref]")
 	fs.IntVar(&f.concurrency, "concurrency", queue.DefaultWorkerConcurrency, "number of scans to run in parallel")
 	fs.StringVar(&f.instance, "instance", "", "this instance's identity among those sharing a database; scopes its scans and its queue partition (see internal/fleet)")
+	fs.IntVar(&f.autoRetryMax, "auto-retry-max", web.DefaultAutoRetryMax, "how many times a failed skill scan is re-enqueued automatically (lost worker, restart, staging error, timeout); 0 disables")
+	fs.DurationVar(&f.autoRetryDelay, "auto-retry-delay", web.DefaultAutoRetryDelay, "wait before the first automatic retry of a failed scan; doubles per retry")
 	fs.StringVar(&f.cloneMode, "clone", "shallow", "clone depth: shallow (--depth 1) or full")
 	fs.DurationVar(&f.scanTimeout, "scan-timeout", worker.DefaultScanTimeout, "wall-clock limit per scan")
 	fs.DurationVar(&f.backendPreflightTTL, "backend-preflight-ttl", 0, "cache lifetime for live backend probes (0 disables; probes consume model tokens)")
@@ -406,6 +410,9 @@ func (f *flags) merge(cfg *config.Config) {
 	// Database backend is config-only, so no f.set guard.
 	f.dbDriver = cfg.Database.Driver
 	f.dbDSN = cfg.Database.DSN
+	if cfg.Instance != "" && !f.set["instance"] {
+		f.instance = cfg.Instance
+	}
 
 	f.mergeFederation(cfg)
 
@@ -692,6 +699,16 @@ func run(log *slog.Logger) error {
 	// walks into cloned scan workspaces under data/work/.
 	_ = os.WriteFile(filepath.Join(f.dataDir, "go.mod"), []byte("module scrutineer/data\n"), dataPermSecure)
 
+	// A shared database with anonymous writers is the one configuration that
+	// silently corrupts state: two instances with no identity both match
+	// SweepRunning's filter, so either restarting fails the other's live
+	// scans, and both drain the same queue partition. Refuse rather than
+	// pick a default — a hostname would look like it worked right up until
+	// someone rebuilt a VM and the identity changed underneath their scans.
+	if f.dbDriver == "postgres" && strings.TrimSpace(f.instance) == "" {
+		return fmt.Errorf("instance is required with driver: postgres — " +
+			"it scopes this instance's scans and its queue partition")
+	}
 	gdb, err := db.OpenBackend(f.databaseOptions())
 	if err != nil {
 		return fmt.Errorf("open db: %w", err)
@@ -772,6 +789,7 @@ func run(log *slog.Logger) error {
 		APIBase:               apiBase,
 		ForkOrg:               f.forkOrg,
 		MetadataDir:           f.metadataDir,
+		SkillDirs:             []string(f.skillLocal),
 		Runner:                runner,
 		ScanTimeout:           f.scanTimeout,
 		SchemaStrict:          f.schemaStrict,
@@ -795,6 +813,8 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	srv.SkillsRepoSHA = skillsRepoSHA
+	srv.AutoRetryMax = f.autoRetryMax
+	srv.AutoRetryDelay = f.autoRetryDelay
 	srv.ModelProxy = worker.ModelProxyOf(runner)
 	srv.Version = version
 	build := readBuildMetadata()
@@ -822,7 +842,9 @@ func run(log *slog.Logger) error {
 	defer stop()
 
 	go q.Start(ctx)
+	go w.StartReaper(ctx, 0)
 	go srv.StartScheduler(ctx)
+	go srv.StartAutoRetry(ctx)
 	go srv.StartRepositoryHealthScorer(ctx)
 	go srv.StartFederation(ctx)
 

@@ -70,8 +70,14 @@ type Worker struct {
 	// keeps per-project metadata. Empty means the worker substitutes
 	// the default, `.scrutineer/`, when staging the skill context.
 	MetadataDir string
-	Runner      SkillRunner
-	OnEvent     func(scanID, repoID uint, name, data string) // optional SSE bridge
+	// SkillDirs are the local skill directories this instance loads
+	// (-skills). Supplementary skill files are staged from here, not from
+	// the SourcePath stored on the skill row: on a shared database that
+	// column holds whichever instance upserted the row last, and its path
+	// need not exist on this host (see skillSourceDir).
+	SkillDirs []string
+	Runner    SkillRunner
+	OnEvent   func(scanID, repoID uint, name, data string) // optional SSE bridge
 	// OnFindingCreated, when non-nil, is called after a findings-emitting
 	// scan persists a fresh Finding row. The web layer wires it up to
 	// auto-enqueue a revalidate scan over High/Critical findings from
@@ -110,6 +116,12 @@ type Worker struct {
 	// timeouts, which do not have a committed analysis result.
 	OnScanFailed func(scan *db.Scan)
 	ScanTimeout  time.Duration
+	// HeartbeatInterval is how often a running scan's row is touched; zero
+	// means DefaultHeartbeatInterval. ReapAfter is how stale that heartbeat
+	// may be before ReapAbandonedScans fails the row; zero means
+	// DefaultReapAfter. See reaper.go.
+	HeartbeatInterval time.Duration
+	ReapAfter         time.Duration
 	// AutoRejectMissedCount is the threshold of consecutive missed rescans at
 	// which an open finding is automatically transitioned to 'rejected'.
 	// 0 means disabled.
@@ -733,6 +745,11 @@ func (w *Worker) wrap(h handler) func(context.Context, []byte) error {
 		if err := w.startScanUnlessOverage(scan); err != nil {
 			return w.dropUnclaimedScan(scan, err)
 		}
+		// Keep the row's heartbeat fresh for as long as this process holds the
+		// scan, including a runner that hangs past its context deadline: the
+		// reaper on any instance reads a stale heartbeat as a dead worker.
+		stopHeartbeat := w.startHeartbeat(scan.ID)
+		defer stopHeartbeat()
 		// The claim is the only moment a row leaves `queued`, and finalizeScan
 		// is minutes away: without this the list pages keep showing the scan as
 		// queued for its whole run.
@@ -841,9 +858,16 @@ func (w *Worker) startScan(scan *db.Scan) error {
 				"status":          db.ScanRunning,
 				"status_priority": db.StatusPriorityFor(db.ScanRunning),
 				"started_at":      &now,
-				"log":             "",
-				errorColumn:       "",
-				"backend":         backend,
+				// First heartbeat at claim, so a new binary never leaves a
+				// running row with a NULL heartbeat (which the reaper treats
+				// as a pre-heartbeat build and tolerates for much longer).
+				"heartbeat_at": &now,
+				// The message is being consumed; nothing is left to remove on
+				// cancel, and a stale id must not delete a later re-enqueue.
+				"queue_message_id": "",
+				"log":              "",
+				errorColumn:        "",
+				"backend":          backend,
 			})
 		if res.Error != nil {
 			return res.Error
@@ -885,6 +909,8 @@ func (w *Worker) startScan(scan *db.Scan) error {
 		scan.Status = db.ScanRunning
 		scan.StatusPriority = db.StatusPriorityFor(db.ScanRunning)
 		scan.StartedAt = &now
+		scan.HeartbeatAt = &now
+		scan.QueueMessageID = ""
 		scan.Log = ""
 		scan.Error = ""
 		scan.Backend = backend
@@ -1372,7 +1398,8 @@ func (w *Worker) resumeAccountPaused(ctx context.Context) (int, error) {
 		if sc.FindingID != nil {
 			priority = PrioFinding
 		}
-		if err := w.Queue.Enqueue(ctx, sc.Kind, sc.ID, priority); err != nil {
+		msgID, err := w.Queue.Enqueue(ctx, sc.Kind, sc.ID, priority)
+		if err != nil {
 			now := w.now().UTC()
 			restoreErr := w.DB.Model(&db.Scan{}).Where("id = ?", sc.ID).Updates(map[string]any{
 				"status":          db.ScanPaused,
@@ -1382,6 +1409,9 @@ func (w *Worker) resumeAccountPaused(ctx context.Context) (int, error) {
 				"paused_until":    sc.PausedUntil,
 			}).Error
 			return resumed, errors.Join(err, restoreErr)
+		}
+		if err := db.RecordQueueMessage(w.DB, sc.ID, msgID); err != nil {
+			w.Log.Warn("record queue message", "scan", sc.ID, "err", err)
 		}
 		resumed++
 	}

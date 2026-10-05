@@ -232,6 +232,23 @@ type Scan struct {
 	// shared-database layer existed (fleet.Install backfills those).
 	Instance string `gorm:"index"`
 
+	// HeartbeatAt is touched by the worker holding this scan, every
+	// HeartbeatInterval, for as long as it holds it. A running row whose beat
+	// has gone stale is how any instance recognises a worker that died without
+	// finishing — see internal/worker/reaper.go. NULL on rows written by a
+	// build from before the heartbeat existed, which the reaper tolerates.
+	HeartbeatAt *time.Time `gorm:"index"`
+
+	// QueueMessageID is the goqite message this scan is queued as, so
+	// cancelling it can remove the message instead of leaving a job that
+	// resolves to a no-longer-queued scan. Cleared when the worker claims it.
+	QueueMessageID string
+
+	// AutoRetries is how many automatic retries deep this scan is: the
+	// parent's count plus one when the retry pass enqueued it, zero for
+	// anything an operator or workflow hook enqueued. See web/auto_retry.go.
+	AutoRetries int `gorm:"not null;default:0"`
+
 	Kind   string     `gorm:"index;not null"`
 	Status ScanStatus `gorm:"index;not null"`
 	Model  string
@@ -2332,6 +2349,12 @@ func BackfillFindings(gdb *gorm.DB) {
 // SweepRunning marks any scans still flagged running as failed. Call once at
 // startup: a running row with no worker attached means the previous process
 // died mid-job and the UI would otherwise show a spinner forever.
+// RecordQueueMessage stores the goqite message id a scan was enqueued as, so
+// a later cancel can delete the message rather than leave it to be dequeued.
+func RecordQueueMessage(gdb *gorm.DB, scanID uint, msgID string) error {
+	return gdb.Model(&Scan{}).Where("id = ?", scanID).Update("queue_message_id", msgID).Error
+}
+
 func SweepRunning(gdb *gorm.DB) error {
 	return gdb.Model(&Scan{}).
 		Where("status = ?", ScanRunning).

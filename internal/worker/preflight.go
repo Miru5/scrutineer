@@ -100,8 +100,12 @@ func (w *Worker) deferSkillPrereqs(ctx context.Context, scan *db.Scan, skill *db
 		"pending", pending,
 		"attempt", attempt+1,
 		"delay", delay)
-	if err := w.Queue.EnqueueRetry(ctx, JobSkill, scan.ID, prio, attempt+1, delay); err != nil {
+	msgID, err := w.Queue.EnqueueRetry(ctx, JobSkill, scan.ID, prio, attempt+1, delay)
+	if err != nil {
 		return false, fmt.Errorf("requeue scan %d on prereq wait: %w", scan.ID, err)
+	}
+	if err := db.RecordQueueMessage(w.DB, scan.ID, msgID); err != nil {
+		w.Log.Warn("record queue message", "scan", scan.ID, "err", err)
 	}
 	return true, nil
 }

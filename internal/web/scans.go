@@ -346,9 +346,35 @@ func parseScanDiffView(scan db.Scan) *scanDiffView {
 	return &v
 }
 
+// ownsScan reports whether this instance may act on scan, writing a 409 when
+// it may not.
+//
+// Reads are fleet-wide by design, so a scan belonging to a teammate is
+// visible here and its buttons are reachable. Acting on one is a different
+// matter: only the owning runner holds the container and the queue message,
+// so a cancel here would flip the row while the work carried on, and a retry
+// would re-enqueue onto this instance's partition and run under this
+// member's model account. Conflict rather than Forbidden — the request is
+// legitimate, it is simply addressed to the wrong instance.
+func (s *Server) ownsScan(w http.ResponseWriter, scan *db.Scan) bool {
+	if fleet.Owns(scan.Instance) {
+		return true
+	}
+	owner := scan.Instance
+	if owner == "" {
+		owner = "another instance"
+	}
+	http.Error(w, "this scan belongs to "+owner+"; act on it from that instance",
+		http.StatusConflict)
+	return false
+}
+
 func (s *Server) scanRetry(w http.ResponseWriter, r *http.Request) {
 	scan, ok := loadByID[db.Scan](s, w, r)
 	if !ok {
+		return
+	}
+	if !s.ownsScan(w, &scan) {
 		return
 	}
 	if scan.Kind != worker.JobSkill || scan.SkillID == nil {
@@ -631,13 +657,49 @@ func (s *Server) restorePausedAfterResumeEnqueueFailure(scan db.Scan, err error)
 	return restoreErr
 }
 
+// dropQueueMessages deletes the goqite messages behind scans that were
+// cancelled while still queued. Flipping the row is not enough: the message
+// survives, and this instance's worker is handed a job for a scan that is no
+// longer queued. Best effort — a message that cannot be removed is still
+// recognised and discarded at dispatch.
+func (s *Server) dropQueueMessages(scans ...db.Scan) {
+	if s.Queue == nil {
+		return
+	}
+	for i := range scans {
+		id := scans[i].QueueMessageID
+		if id == "" {
+			continue
+		}
+		if err := s.Queue.Remove(context.Background(), id); err != nil {
+			s.Log.Warn("drop queue message", "scan", scans[i].ID, "message", id, "err", err)
+		}
+	}
+}
+
+// queuedWithMessages loads this instance's queued rows matching where, with
+// just enough columns for dropQueueMessages. Read before a bulk status flip:
+// afterwards the rows no longer say they were queued.
+func (s *Server) queuedWithMessages(where string, args ...any) []db.Scan {
+	var scans []db.Scan
+	if err := fleet.ScopeOwn(s.DB.Select("id", "queue_message_id").Where(where, args...)).
+		Where("status = ?", db.ScanQueued).Find(&scans).Error; err != nil {
+		s.Log.Warn("collect queued scan messages", "err", err)
+	}
+	return scans
+}
+
 func (s *Server) enqueueResumedScan(ctx context.Context, scan db.Scan) error {
 	priority := worker.PrioScan
 	if scan.FindingID != nil {
 		priority = worker.PrioFinding
 	}
-	if err := s.Queue.Enqueue(ctx, scan.Kind, scan.ID, priority); err != nil {
+	msgID, err := s.Queue.Enqueue(ctx, scan.Kind, scan.ID, priority)
+	if err != nil {
 		return errors.Join(err, s.restorePausedAfterResumeEnqueueFailure(scan, err))
+	}
+	if err := db.RecordQueueMessage(s.DB, scan.ID, msgID); err != nil {
+		s.Log.Warn("record queue message", "scan", scan.ID, "err", err)
 	}
 	s.publishScanRow(&scan)
 	return nil
@@ -679,6 +741,12 @@ func (s *Server) scansResumePaused(w http.ResponseWriter, r *http.Request) {
 func (s *Server) scanResume(w http.ResponseWriter, r *http.Request) {
 	scan, ok := loadByID[db.Scan](s, w, r)
 	if !ok {
+		return
+	}
+	// Resume re-queues the row onto this instance's partition, so it carries
+	// the same hazard as retry: a teammate's paused scan would run here, under
+	// this member's model account.
+	if !s.ownsScan(w, &scan) {
 		return
 	}
 	if scan.Status != db.ScanPaused {
@@ -741,6 +809,9 @@ func retryFailedToast(retried, skipped, errored int) Flash {
 func (s *Server) scanCancel(w http.ResponseWriter, r *http.Request) {
 	scan, ok := loadByID[db.Scan](s, w, r)
 	if !ok {
+		return
+	}
+	if !s.ownsScan(w, &scan) {
 		return
 	}
 	if scan.Status.Terminal() {
@@ -856,12 +927,15 @@ func (s *Server) scansCancelAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now()
+	// Read before the flip: afterwards the rows no longer say they were queued.
+	pending := s.queuedWithMessages("repository_id = ?", repoID)
 	queued, err := updateScansWithAudit(s.DB.Where("repository_id = ? AND status = ?", repoID, db.ScanQueued),
 		scanStatusUpdates(db.ScanCancelled, worker.CancelledByUser, &now, nil), db.AuditEventScanCancelled, db.ScanQueued, db.ScanCancelled, db.SourceAnalyst)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.dropQueueMessages(pending...)
 	grouped := make([]uint, 0, len(queued))
 	for _, scan := range queued {
 		grouped = append(grouped, scan.ID)

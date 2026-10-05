@@ -163,13 +163,44 @@ func (s *Server) processScheduledRepository(
 		s.Log.Warn("scheduler: invalid schedule", "repo", repo.Name, "schedule", expr, "err", err)
 		return
 	}
+	if !s.claimScheduledFiring(repo, next) {
+		return
+	}
 	if repo.NextScheduledScanAt != nil {
 		s.runScheduledScan(ctx, repo, remoteHeadTimeout)
 	}
-	if err := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID).
-		UpdateColumn("next_scheduled_scan_at", next).Error; err != nil {
-		s.Log.Error("scheduler: advance next_scheduled_scan_at", "repo", repo.Name, "err", err)
+}
+
+// claimScheduledFiring advances repo's due time to next and reports whether
+// this tick is the one that gets to fire it.
+//
+// The UPDATE is conditional on the due time this tick read, so it is a
+// compare-and-set: where several instances share a database, every one of them
+// sees the same due repository and tries, and exactly one matches a row. The
+// losers match nothing and skip, which is what keeps a scheduled scan from
+// firing once per instance — the repositories table is shared, and nothing
+// else in the scheduler is.
+//
+// It also runs before the firing rather than after it. Advancing afterwards
+// left the row due for the whole firing, so a crash or a restart part-way
+// through re-fired the same repository on every tick until the process stayed
+// up long enough to finish. Claiming first costs at most one missed scheduled
+// run instead, which the next tick picks up.
+func (s *Server) claimScheduledFiring(repo db.Repository, next time.Time) bool {
+	q := s.DB.Model(&db.Repository{}).Where("id = ?", repo.ID)
+	if repo.NextScheduledScanAt == nil {
+		// A repository that has just been given a schedule: the first tick
+		// only records the due time, so the condition is the NULL it read.
+		q = q.Where("next_scheduled_scan_at IS NULL")
+	} else {
+		q = q.Where("next_scheduled_scan_at = ?", *repo.NextScheduledScanAt)
 	}
+	res := q.UpdateColumn("next_scheduled_scan_at", next)
+	if res.Error != nil {
+		s.Log.Error("scheduler: claim scheduled firing", "repo", repo.Name, "err", res.Error)
+		return false
+	}
+	return res.RowsAffected == 1
 }
 
 // runScheduledScan performs one scheduled firing for repo: sync from the

@@ -82,12 +82,17 @@ var tmplFS embed.FS
 var staticFS embed.FS
 
 type Server struct {
-	DB     *gorm.DB
-	Queue  *queue.Queue
-	Log    *slog.Logger
-	Broker *Broker
-	Worker *worker.Worker
-	tmpl   *template.Template
+	DB    *gorm.DB
+	Queue *queue.Queue
+	Log   *slog.Logger
+	// AutoRetryMax and AutoRetryDelay drive the automatic retry of this
+	// instance's failed skill scans (auto_retry.go). Zero AutoRetryMax
+	// disables the pass; zero AutoRetryDelay means DefaultAutoRetryDelay.
+	AutoRetryMax   int
+	AutoRetryDelay time.Duration
+	Broker         *Broker
+	Worker         *worker.Worker
+	tmpl           *template.Template
 
 	// ModelProxy, when set (-model-proxy), serves worker.ModelProxyPathPrefix
 	// for scan containers. It shares the scan-facing /api/ exemption from the
@@ -3332,7 +3337,11 @@ func (s *Server) repoScheduleUpdate(w http.ResponseWriter, r *http.Request) {
 // new options (SubPath, FindingID, Model) accumulate.
 type ScanOpts struct {
 	// AuditRetry marks operator retries only, not automatic child scans or reruns.
-	AuditRetry  bool
+	AuditRetry bool
+	// AutoRetries is the automatic-retry depth of this enqueue: the parent's
+	// count plus one when the retry pass made it, zero for everything an
+	// operator or a workflow hook enqueues. See auto_retry.go.
+	AutoRetries int
 	Model       string
 	Effort      string
 	FindingID   *uint
@@ -3503,6 +3512,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		DependentID:          opts.DependentID,
 		BaselineScanID:       opts.BaselineScanID,
 		RemediationAttemptID: opts.RemediationAttemptID,
+		AutoRetries:          opts.AutoRetries,
 		SubPath:              opts.SubPath,
 		ScopeMode:            opts.ScopeMode,
 		ScanGroup:            opts.ScanGroup,
@@ -3557,8 +3567,12 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if opts.FindingID != nil {
 		prio = worker.PrioFinding
 	}
-	if err := s.Queue.Enqueue(ctx, kind, scan.ID, prio); err != nil {
+	msgID, err := s.Queue.Enqueue(ctx, kind, scan.ID, prio)
+	if err != nil {
 		return 0, s.scanEnqueueFailure(scan, err, opts.AuditRetry)
+	}
+	if err := db.RecordQueueMessage(s.DB, scan.ID, msgID); err != nil {
+		s.Log.Warn("record queue message", "scan", scan.ID, "err", err)
 	}
 	s.DB.Model(&db.Repository{}).Where("id = ?", repoID).Update("updated_at", time.Now())
 	// Published without the scan ID on purpose: no open page holds a row for a

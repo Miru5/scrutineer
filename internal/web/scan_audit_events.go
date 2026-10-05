@@ -67,9 +67,10 @@ func logScanControl(tx *gorm.DB, kind string, scan db.Scan, lineage scanLineage,
 
 func (s *Server) cancelIdleScanWithAudit(id uint, reason string, source db.FindingSource) (bool, error) {
 	var changed bool
+	var cancelled db.Scan
 	err := s.DB.Transaction(func(tx *gorm.DB) error {
 		var live db.Scan
-		if err := tx.Select("id", scanAuditRepositoryID, "status").First(&live, id).Error; err != nil {
+		if err := tx.Select("id", scanAuditRepositoryID, "status", "queue_message_id").First(&live, id).Error; err != nil {
 			return err
 		}
 		if live.Status != db.ScanQueued && live.Status != db.ScanRunning {
@@ -82,12 +83,14 @@ func (s *Server) cancelIdleScanWithAudit(id uint, reason string, source db.Findi
 			return result.Error
 		}
 		changed = true
+		cancelled = live
 		return logScanControl(tx, db.AuditEventScanCancelled, live, scanLineage{}, live.Status, db.ScanCancelled, source)
 	})
 	if err != nil {
 		return false, err
 	}
 	if changed {
+		s.dropQueueMessages(cancelled)
 		s.settleCancelledScanGroups(id)
 	}
 	return changed, nil

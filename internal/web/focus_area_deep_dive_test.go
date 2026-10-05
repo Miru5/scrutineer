@@ -220,3 +220,49 @@ func TestAutoEnqueueFocusAreaDeepDivesPreservesScope(t *testing.T) {
 			child.SubPath, child.Ref, child.ScanGroup, parent.SubPath, parent.Ref, parent.ScanGroup)
 	}
 }
+
+// A threat-model owned by another instance is left to its owner's runner: on
+// a shared database this hook fires wherever the scan was finalized, which is
+// not necessarily where it was enqueued. Without the ownership check the
+// child is created against the other member's repository, stamped with this
+// instance's identity and run on this instance's model tier.
+func TestAutoEnqueueFocusAreaDeepDivesSkipsOtherInstance(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/other-instance", Name: "other-instance"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	deepDive := db.Skill{Name: deepDiveSkillName, Body: "b", OutputFile: "r.json", OutputKind: "findings", Active: true, Source: "ui"}
+	if err := s.DB.Create(&deepDive).Error; err != nil {
+		t.Fatal(err)
+	}
+	parent := db.Scan{
+		RepositoryID: repo.ID,
+		Status:       db.ScanFailed,
+		SkillName:    threatModelSkillName,
+		ScanGroup:    "triage-other",
+	}
+	if err := s.DB.Create(&parent).Error; err != nil {
+		t.Fatal(err)
+	}
+	// BeforeCreate stamps this instance's identity; rewrite it so the row
+	// looks like a teammate's, which is what the shared database serves.
+	if err := s.DB.Model(&db.Scan{}).Where("id = ?", parent.ID).
+		Update("instance", "someone-else").Error; err != nil {
+		t.Fatal(err)
+	}
+	parent.Instance = "someone-else"
+
+	s.autoEnqueueFocusAreaDeepDives(&parent)
+
+	var n int64
+	if err := s.DB.Model(&db.Scan{}).
+		Where("repository_id = ? AND skill_id = ?", repo.ID, deepDive.ID).
+		Count(&n).Error; err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("deep-dive scans = %d, want 0 for another instance's threat-model", n)
+	}
+}

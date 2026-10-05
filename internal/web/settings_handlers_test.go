@@ -314,7 +314,7 @@ func startSettingsRunnerJob(t *testing.T, s *Server) context.Context {
 			t.Error("queue did not stop")
 		}
 	})
-	if err := s.Queue.Enqueue(ctx, "restart-test", 1, 0); err != nil {
+	if _, err := s.Queue.Enqueue(ctx, "restart-test", 1, 0); err != nil {
 		t.Fatal(err)
 	}
 	select {

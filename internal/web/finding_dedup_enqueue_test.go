@@ -474,3 +474,28 @@ func TestSettleCancelledScanGroupsIgnoresUnflippedRows(t *testing.T) {
 		t.Errorf("queued = %d, want 0 while the sibling is still running", n)
 	}
 }
+
+// The group-settlement path can hand the hook a scan another instance ran —
+// the fleet-wide reaper settles the cohort of any scan it fails. The dedup
+// pass must then not be enqueued here: it would run against their repository
+// under this member's account.
+func TestAutoEnqueueFindingDedup_skipsOtherInstance(t *testing.T) {
+	s, done, repoID, dedupID := dedupTestSetup(t)
+	defer done()
+	prior := newScan(t, s, repoID, "security-deep-dive")
+	newFindingUnder(t, s, repoID, prior.ID, db.FindingNew)
+	scan := newScan(t, s, repoID, "security-deep-dive")
+	newFindingUnder(t, s, repoID, scan.ID, db.FindingNew)
+
+	theirs := *scan
+	theirs.Instance = "someone-else"
+	s.autoEnqueueFindingDedup(&theirs)
+	if got := dedupQueued(s, repoID, dedupID); got != 0 {
+		t.Fatalf("dedup queued for another instance's scan: %d", got)
+	}
+	// The same scan owned here does qualify, so the guard is what stopped it.
+	s.autoEnqueueFindingDedup(scan)
+	if got := dedupQueued(s, repoID, dedupID); got != 1 {
+		t.Fatalf("dedup queued for our own scan = %d, want 1", got)
+	}
+}

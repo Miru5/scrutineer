@@ -1244,14 +1244,48 @@ func ValidateSkillPaths(name, outputFile string) error {
 	return validateSkillPaths(name, outputFile)
 }
 
+// skillSourceDir returns the directory the skill's supplementary files
+// (scripts/, references/, assets/) are staged from, or "" when there is
+// nothing on this host to stage.
+//
+// The skill row's SourcePath is an absolute path on whichever instance
+// upserted the row last (skills.Upsert overwrites it on every start). With
+// one database shared by several VMs that is usually some other member's
+// checkout, so a scan here would fail with "open /home/<them>/.../skills/x:
+// no such file or directory" the moment they restart. The local skill
+// directories this instance was started with are therefore consulted first,
+// by skill name; SourcePath is honoured only when it exists here (a single
+// instance, evals, tests). A skill found nowhere stages SKILL.md and
+// schema.json from the row alone rather than failing the scan.
+func skillSourceDir(skill *db.Skill, localDirs []string) string {
+	if skill.Source == "ui" {
+		return ""
+	}
+	if skill.Name != "" {
+		for _, dir := range localDirs {
+			candidate := filepath.Join(dir, skill.Name)
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				return candidate
+			}
+		}
+	}
+	if skill.SourcePath != "" {
+		if info, err := os.Stat(skill.SourcePath); err == nil && info.IsDir() {
+			return skill.SourcePath
+		}
+	}
+	return ""
+}
+
 // stageSkill writes the skill's files into dst so claude-code discovers them
 // at ./.claude/skills/{name}. SKILL.md and schema.json are reconstructed from
 // the DB; supplementary files (scripts/, references/, assets/) are copied
-// from SourcePath when the skill was loaded from disk.
+// from the directory skillSourceDir resolves: the skill's directory under
+// one of localDirs, else SourcePath when that exists on this host.
 //
 // schema.json is also written to workRoot so the `./schema.json` path every
 // SKILL.md references resolves without the model having to glob for it (#221).
-func stageSkill(skill *db.Skill, workRoot, dst string) error {
+func stageSkill(skill *db.Skill, workRoot, dst string, localDirs []string) error {
 	if err := os.RemoveAll(dst); err != nil {
 		return err
 	}
@@ -1270,11 +1304,11 @@ func stageSkill(skill *db.Skill, workRoot, dst string) error {
 			return err
 		}
 	}
-	if skill.SourcePath != "" && skill.Source != "ui" {
-		if err := copyAux(skill.SourcePath, dst); err != nil {
+	if src := skillSourceDir(skill, localDirs); src != "" {
+		if err := copyAux(src, dst); err != nil {
 			return fmt.Errorf("copy aux files: %w", err)
 		}
-		if err := mirrorScripts(skill.SourcePath, workRoot); err != nil {
+		if err := mirrorScripts(src, workRoot); err != nil {
 			return fmt.Errorf("mirror scripts: %w", err)
 		}
 	}
@@ -1477,7 +1511,7 @@ func (w *Worker) stageWorkspace(ctx context.Context, workRoot, skillDir string, 
 		return skillContext{}, err
 	}
 	return stageWorkspaceWithInputs(
-		workRoot, skillDir, w.apiBaseFor(skill.Name), w.ForkOrg, w.metadataDir(), scan, skill, recon, novelty, controls, feedback,
+		workRoot, skillDir, w.apiBaseFor(skill.Name), w.ForkOrg, w.metadataDir(), w.SkillDirs, scan, skill, recon, novelty, controls, feedback,
 	)
 }
 
@@ -1486,12 +1520,13 @@ func (w *Worker) stageWorkspace(ctx context.Context, workRoot, skillDir string, 
 // rendered skill bundle, and optional import payloads. Production adds recon
 // context for threat-model in Worker.stageWorkspace.
 func StageWorkspace(workRoot, skillDir, apiBase, forkOrg, metadataDir string, scan *db.Scan, skill *db.Skill) error {
-	_, err := stageWorkspaceWithInputs(workRoot, skillDir, apiBase, forkOrg, metadataDir, scan, skill, nil, nil, nil, nil)
+	_, err := stageWorkspaceWithInputs(workRoot, skillDir, apiBase, forkOrg, metadataDir, nil, scan, skill, nil, nil, nil, nil)
 	return err
 }
 
 func stageWorkspaceWithInputs(
 	workRoot, skillDir, apiBase, forkOrg, metadataDir string,
+	localSkillDirs []string,
 	scan *db.Scan,
 	skill *db.Skill,
 	recon *skillContextRecon,
@@ -1500,9 +1535,9 @@ func stageWorkspaceWithInputs(
 	feedback []db.FindingFeedback,
 ) (skillContext, error) {
 	if scan.ExplorationMode != "" {
-		return stageExploratoryWorkspace(workRoot, skillDir, apiBase, scan, skill)
+		return stageExploratoryWorkspace(workRoot, skillDir, apiBase, localSkillDirs, scan, skill)
 	}
-	if err := stageSkill(skill, workRoot, skillDir); err != nil {
+	if err := stageSkill(skill, workRoot, skillDir, localSkillDirs); err != nil {
 		return skillContext{}, fmt.Errorf("stage skill: %w", err)
 	}
 	document, err := buildSkillContext(apiBase, forkOrg, metadataDir, scan, &scan.Repository, recon, novelty, controls)

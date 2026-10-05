@@ -697,3 +697,96 @@ func TestScheduleTick_baselineLookupErrorAbortsRun(t *testing.T) {
 		t.Fatalf("wrote %d scan row(s) after a baseline lookup failure, want 0 (no rescan, no skip)", scans)
 	}
 }
+
+// Several instances share the repositories table, so every one of them sees the
+// same due repository on its own tick and tries to fire it. Once the winner has
+// enqueued, the in-flight guard turns the others away — but in the window
+// before that (an upstream sync and a remote HEAD lookup long) nothing else
+// stops two instances firing the same repository. The claim closes it: a
+// compare-and-set on the due time each tick read, so the loser returns before
+// it does any work at all, leaving neither a scan nor a skip row behind.
+func TestScheduleFiring_claimedByOneTickOnly(t *testing.T) {
+	s, _, done := scheduleTestServer(t, "def456", nil)
+	defer done()
+	s.DB.Create(&db.Skill{Name: deepDiveSkillName, Description: "d", Body: "b", OutputFile: "report.json", Version: 1, Active: true, Source: "ui"})
+	s.DB.Create(&db.Skill{Name: threatModelSkillName, Description: "t", Body: "b", OutputFile: "report.json", Version: 1, Active: true, Source: "ui"})
+	repo := scheduledRepo(t, s, "daily", time.Now().Add(-time.Minute))
+	finished := time.Now()
+	s.DB.Create(&db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, Commit: "abc123", FinishedAt: &finished})
+
+	// Both ticks load the row before either writes it back: the state two
+	// instances are in whenever a repository comes due.
+	var snapshot db.Repository
+	if err := s.DB.First(&snapshot, repo.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	for range 2 {
+		s.processScheduledRepository(context.Background(), now, "", snapshot, schedulerRemoteHeadTimeout)
+	}
+
+	var queued []db.Scan
+	s.DB.Where("repository_id = ? AND status = ?", repo.ID, db.ScanQueued).Find(&queued)
+	if len(queued) != 1 {
+		t.Fatalf("queued %d scan(s) from two ticks on the same due time, want 1", len(queued))
+	}
+	// The loser must not have reached the in-flight guard either: being turned
+	// away there is the fallback, and it leaves a "still queued" skip row that
+	// reads as a scheduling decision nobody made.
+	var skips int64
+	s.DB.Model(&db.Scan{}).Where("repository_id = ? AND kind = ?", repo.ID, scheduleKind).Count(&skips)
+	if skips != 0 {
+		t.Fatalf("the losing tick recorded %d skip row(s); it should have stopped at the claim", skips)
+	}
+}
+
+func TestClaimScheduledFiring(t *testing.T) {
+	s, _, done := scheduleTestServer(t, "def456", nil)
+	defer done()
+	due := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	repo := scheduledRepo(t, s, "daily", due)
+	var snapshot db.Repository
+	if err := s.DB.First(&snapshot, repo.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	next := time.Now().Add(time.Hour)
+
+	if !s.claimScheduledFiring(snapshot, next) {
+		t.Fatal("the first claim on a due repository must win")
+	}
+	if s.claimScheduledFiring(snapshot, next.Add(time.Hour)) {
+		t.Fatal("a second claim on the same due time must lose")
+	}
+
+	var got db.Repository
+	s.DB.First(&got, repo.ID)
+	if got.NextScheduledScanAt == nil || !got.NextScheduledScanAt.Truncate(time.Second).Equal(next.UTC().Truncate(time.Second)) {
+		t.Fatalf("due time = %v, want the winner's %v", got.NextScheduledScanAt, next.UTC())
+	}
+}
+
+// A repository that has just been given a schedule carries no due time yet.
+// The first tick records one without firing, and that record is claimed the
+// same way, so two instances cannot both backfill it.
+func TestClaimScheduledFiring_backfillClaimedOnce(t *testing.T) {
+	s, _, done := scheduleTestServer(t, "def456", nil)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/fresh", Name: "fresh", ScanSchedule: "daily"}
+	if err := s.DB.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	var snapshot db.Repository
+	if err := s.DB.First(&snapshot, repo.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.NextScheduledScanAt != nil {
+		t.Fatal("precondition: a freshly scheduled repository has no due time")
+	}
+	next := time.Now().Add(time.Hour)
+	if !s.claimScheduledFiring(snapshot, next) {
+		t.Fatal("the first backfill must win")
+	}
+	if s.claimScheduledFiring(snapshot, next) {
+		t.Fatal("a second backfill from the same NULL snapshot must lose")
+	}
+}

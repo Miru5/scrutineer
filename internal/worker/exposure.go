@@ -122,7 +122,7 @@ func (w *Worker) doExposure(ctx context.Context, scan *db.Scan, emit func(Event)
 	}
 
 	skillDir := w.Runner.SkillDir(workRoot, skill.Name)
-	if err := stageSkill(&skill, workRoot, skillDir); err != nil {
+	if err := stageSkill(&skill, workRoot, skillDir, w.SkillDirs); err != nil {
 		return "", fmt.Errorf("stage skill: %w", err)
 	}
 	document, err := buildSkillContext(w.apiBaseFor(skill.Name), w.ForkOrg, w.metadataDir(), scan, &scan.Repository, nil, nil, nil)

@@ -296,7 +296,7 @@ func exploratorySourceFile(name string) bool {
 	return slices.Contains(exploratorySourceExtensions, strings.ToLower(path.Ext(name)))
 }
 
-func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, scan *db.Scan, skill *db.Skill) (skillContext, error) {
+func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, localSkillDirs []string, scan *db.Scan, skill *db.Skill) (skillContext, error) {
 	if err := ValidateExploration(scan, skill.Name); err != nil {
 		return skillContext{}, err
 	}
@@ -310,7 +310,7 @@ func stageExploratoryWorkspace(workRoot, skillDir, apiBase string, scan *db.Scan
 	// The loaded skill is scan-local. Update it too so the logged prompt and
 	// any report-repair invocation describe the instructions actually staged.
 	skill.Body = string(body)
-	if err := stageSkill(skill, workRoot, skillDir); err != nil {
+	if err := stageSkill(skill, workRoot, skillDir, localSkillDirs); err != nil {
 		return skillContext{}, err
 	}
 	staged := *scan
