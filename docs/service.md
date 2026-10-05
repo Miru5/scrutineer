@@ -11,6 +11,25 @@ handles `SIGTERM` and exits cleanly whatever starts it — but a fleet member ha
 a few obligations that are easy to get wrong by hand, and they are collected
 below.
 
+## The short way
+
+`scripts/install-service.sh` writes the unit below, reloads systemd, and with
+`--now` enables and starts it:
+
+```sh
+go build -o bin/scrutineer ./cmd/scrutineer
+scripts/install-service.sh --instance <name> --now
+```
+
+It refuses rather than installs a unit that cannot work: no binary built yet,
+a `scrutineer.yml` that the default config path will not pick up, or a
+`postgres` driver with no instance name anywhere. `--dry-run` prints the unit
+and the commands and changes nothing; `--name` installs a second instance from
+a second clone under its own unit. An existing unit whose contents differ is
+copied aside before being replaced, so a hand-edited one is never lost.
+
+The rest of this page is what that unit says and why.
+
 ## The unit
 
 A **user** unit, not a system one: the instance runs as the person who owns the
