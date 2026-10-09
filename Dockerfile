@@ -12,7 +12,7 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.commit=${COMMIT}" -o /scrutineer ./
 
 FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS claude
 
-RUN npm install -g @anthropic-ai/claude-code@2.1.283
+RUN npm install -g @anthropic-ai/claude-code@2.1.287
 
 FROM python:3.14-alpine@sha256:9e9fde4d32eedce0b661d9ab91e826b62dddf28e928c230ec55f1866cac66b01 AS python-tools
 
@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir "semgrep==${SEMGREP_VERSION}" "setuptools<81" "ba
 
 FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS go-tools
 RUN apk add --no-cache git
-ARG BETTERLEAKS_VERSION=v1.8.1
+ARG BETTERLEAKS_VERSION=v1.9.0
 RUN GOBIN=/out CGO_ENABLED=0 go install -ldflags "-X=github.com/betterleaks/betterleaks/version.Version=${BETTERLEAKS_VERSION}" github.com/betterleaks/betterleaks@${BETTERLEAKS_VERSION}
 
 RUN GOBIN=/out go install github.com/git-pkgs/git-pkgs@v0.20.0

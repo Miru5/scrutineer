@@ -7,17 +7,17 @@
 # update the selected asset and checksum atomically. A mismatched tag/digest in
 # a Renovate PR fails sha256sum below and usually means asset identification
 # failed upstream.
-ARG CLAUDE_AMD64_LOCK=v2.1.283@sha256:db404a91bec8baffb53463166fdc8bf579208a527d60afc2d984d7507dc0c2f9
-ARG CLAUDE_ARM64_LOCK=v2.1.283@sha256:a2e7d497d40041d7eca8f8fd1d77405a6501ff8b1a61fa02a0e95c458824a43e
+ARG CLAUDE_AMD64_LOCK=v2.1.287@sha256:627e578d436ebc12daf059c0379dee23f77c761fb7d2ad5de82645dc29b24372
+ARG CLAUDE_ARM64_LOCK=v2.1.287@sha256:9b1f2996166948602b399cea6c11a654f52ac3b38c27142dfa4e6420e57eb3bd
 
-ARG CODEX_AMD64_LOCK=rust-v0.156.1@sha256:8b711520beddf385467b8da4d2c93736637c6ba1e46811cf0d8606b7c490b6f6
-ARG CODEX_ARM64_LOCK=rust-v0.156.1@sha256:fdd47ed6aade0360796fd3f6f95a45096f327c15e19e8c7339f9dc5633041786
+ARG CODEX_AMD64_LOCK=rust-v0.159.3@sha256:3930f31ac5fca861ea3e444e2683f261190d96b63fba58e0a40a879174369cdf
+ARG CODEX_ARM64_LOCK=rust-v0.159.3@sha256:20b7d673cf2b64b6c6208fa4fda06feb9dac0572da9987294b48cde1dab9d001
 
-ARG OPENCODE_AMD64_LOCK=v1.18.32@sha256:3046e0404fdc60fb80307e7a47824ba07477364178a4d09baa8548496dd6d43b
-ARG OPENCODE_ARM64_LOCK=v1.18.32@sha256:568461b7d4d8c19865c97e9a1102e613049c6039d01fe772154de873c1865840
+ARG OPENCODE_AMD64_LOCK=v1.18.34@sha256:0f22479647226d1d2dd99595d20082ee7bda3870b62dc6a90b41efc1a71d7e9a
+ARG OPENCODE_ARM64_LOCK=v1.18.34@sha256:bbdb3f00c2c51e42e315525233151309724226a8776da8e9145e3b0fa3d5310f
 
-ARG COPILOT_AMD64_LOCK=v1.0.88@sha256:42f40c08ff8a8ff78522161e4b5e2b86340ad8bb0853a5f1aa64ce65b48d007b
-ARG COPILOT_ARM64_LOCK=v1.0.88@sha256:e263f5f9eb0db5dddf5775ac98c437e27743857ce0ba310f08f2338aebd1107d
+ARG COPILOT_AMD64_LOCK=v1.0.91@sha256:0e7a0e85290228afecce4d4eed42fda80c0f5b9c86f433deb246cde1d5eec8e5
+ARG COPILOT_ARM64_LOCK=v1.0.91@sha256:26a42491bec497a921f198d550a614e0a8989f1c2418f5bb1dd2150f09e6eac0
 
 ARG SEMGREP_VERSION=1.178.0
 
@@ -28,7 +28,7 @@ FROM golang:1.27.1-trixie@sha256:433790e515d27dc6003e847e644cc0af956985cf315c1c5
 
 COPY scripts/retry-build-command.sh /usr/local/bin/retry-build-command.sh
 # Go proxy/checksum requests can fail transiently.
-ARG BETTERLEAKS_VERSION=v1.8.1
+ARG BETTERLEAKS_VERSION=v1.9.0
 RUN GOBIN=/out CGO_ENABLED=0 sh /usr/local/bin/retry-build-command.sh go install -ldflags "-X=github.com/betterleaks/betterleaks/version.Version=${BETTERLEAKS_VERSION}" github.com/betterleaks/betterleaks@${BETTERLEAKS_VERSION}
 RUN GOBIN=/out sh /usr/local/bin/retry-build-command.sh go install github.com/git-pkgs/git-pkgs@v0.20.0
 RUN GOBIN=/out sh /usr/local/bin/retry-build-command.sh go install github.com/git-pkgs/brief/cmd/brief@v0.14.0
