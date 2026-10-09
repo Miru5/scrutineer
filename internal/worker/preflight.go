@@ -151,19 +151,39 @@ func (w *Worker) unsatisfiedPrereqs(scan *db.Scan, names []string) (pending, dea
 			continue
 		}
 		if scan.ScanGroup != "" {
-			if status := w.prereqStatus(
+			status := w.prereqStatus(
 				"repository_id = ? AND skill_name = ? AND scan_group = ?",
 				[]any{scan.RepositoryID, name, scan.ScanGroup},
 				inFlight,
-			); status != prereqAbsent {
-				switch status {
-				case prereqPending:
-					pending = append(pending, name)
-				case prereqDead:
-					dead = append(dead, name)
+			)
+			switch status {
+			case prereqSatisfied:
+				continue
+			case prereqPending:
+				// A fresh result is still coming for this group; waiting for
+				// it is what keeps a grouped rescan off stale prereq results.
+				pending = append(pending, name)
+				continue
+			case prereqDead:
+				// No fresh result is coming, so fall back to the repository's
+				// history rather than failing: had this group never enqueued
+				// the prereq, the prereqAbsent path below would have accepted
+				// that same historical scan. A prereq with no completed scan
+				// anywhere on the repository still fails.
+				if w.prereqStatus(
+					"repository_id = ? AND skill_name = ?",
+					[]any{scan.RepositoryID, name},
+					inFlight,
+				) == prereqSatisfied {
+					w.Log.Info("prereq dead in this scan group; using the repository's last completed scan",
+						"prereq", name, "repo", scan.RepositoryID, "group", scan.ScanGroup,
+						"skill", scan.SkillName, "scan", scan.ID)
+					continue
 				}
+				dead = append(dead, name)
 				continue
 			}
+			// prereqAbsent: fall through to the repository-wide check.
 		}
 		switch w.prereqStatus(
 			"repository_id = ? AND skill_name = ?",

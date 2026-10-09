@@ -382,3 +382,107 @@ func TestPreflightSkill_failedPrereqWithRetryInFlightDefers(t *testing.T) {
 		t.Errorf("scan status = %q, want queued (defer while retry is in flight)", loaded.Status)
 	}
 }
+
+// A cancelled prereq in the group must not leave the dependent worse off than
+// never having enqueued one at all: scanGroupFallsBackWhenNoSiblingPrereq
+// covers the absent case, and a cancelled batch must reach the same place
+// rather than failing every dependent in it.
+func TestPreflightSkill_scanGroupCancelledSiblingFallsBackToHistory(t *testing.T) {
+	w := newPreflightWorker(t)
+	scan := seedPreflightFixtures(t, w, "threat-model")
+	scan.ScanGroup = "grp-1"
+	if err := w.DB.Save(scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	tm := seedPrereqSkill(t, w, "threat-model", true)
+	seedPrereqScan(t, w, tm, scan.RepositoryID, db.ScanDone)                             // the repository's history
+	seedPrereqScanInGroup(t, w, tm, scan.RepositoryID, db.ScanCancelled, scan.ScanGroup) // this batch, cancelled
+
+	deferred, err := w.preflightSkill(context.Background(), scan, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deferred {
+		t.Error("a cancelled sibling prereq should fall back to the repository's completed scan, not fail")
+	}
+	var loaded db.Scan
+	if err := w.DB.First(&loaded, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status == db.ScanFailed {
+		t.Errorf("scan was failed on a prereq the repository has satisfied: %q", loaded.Error)
+	}
+}
+
+// Same for a sibling that failed rather than being cancelled: no fresh result
+// is coming either way.
+func TestPreflightSkill_scanGroupFailedSiblingFallsBackToHistory(t *testing.T) {
+	w := newPreflightWorker(t)
+	scan := seedPreflightFixtures(t, w, "threat-model")
+	scan.ScanGroup = "grp-1"
+	if err := w.DB.Save(scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	tm := seedPrereqSkill(t, w, "threat-model", true)
+	seedPrereqScan(t, w, tm, scan.RepositoryID, db.ScanDone)
+	seedPrereqScanInGroup(t, w, tm, scan.RepositoryID, db.ScanFailed, scan.ScanGroup)
+
+	deferred, err := w.preflightSkill(context.Background(), scan, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deferred {
+		t.Error("a failed sibling prereq should fall back to the repository's completed scan")
+	}
+}
+
+// The fallback is not a licence to run on nothing: a prereq with no completed
+// scan anywhere on the repository must still fail the dependent fast.
+func TestPreflightSkill_scanGroupDeadSiblingWithNoHistoryStillFails(t *testing.T) {
+	w := newPreflightWorker(t)
+	scan := seedPreflightFixtures(t, w, "threat-model")
+	scan.ScanGroup = "grp-1"
+	if err := w.DB.Save(scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	tm := seedPrereqSkill(t, w, "threat-model", true)
+	seedPrereqScanInGroup(t, w, tm, scan.RepositoryID, db.ScanCancelled, scan.ScanGroup)
+
+	deferred, err := w.preflightSkill(context.Background(), scan, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deferred {
+		t.Fatal("a dead prereq with no history should still stop the dependent")
+	}
+	var loaded db.Scan
+	if err := w.DB.First(&loaded, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Status != db.ScanFailed {
+		t.Errorf("scan status = %q, want failed when no completed prereq exists anywhere", loaded.Status)
+	}
+}
+
+// A sibling still in flight keeps deferring: the fallback applies only once
+// every attempt in the group is terminal.
+func TestPreflightSkill_scanGroupInFlightSiblingStillDefersOverHistory(t *testing.T) {
+	w := newPreflightWorker(t)
+	scan := seedPreflightFixtures(t, w, "threat-model")
+	scan.ScanGroup = "grp-1"
+	if err := w.DB.Save(scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	tm := seedPrereqSkill(t, w, "threat-model", true)
+	seedPrereqScan(t, w, tm, scan.RepositoryID, db.ScanDone)
+	seedPrereqScanInGroup(t, w, tm, scan.RepositoryID, db.ScanCancelled, scan.ScanGroup)
+	seedPrereqScanInGroup(t, w, tm, scan.RepositoryID, db.ScanRunning, scan.ScanGroup)
+
+	deferred, err := w.preflightSkill(context.Background(), scan, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deferred {
+		t.Error("a running sibling prereq should still defer, even with history available")
+	}
+}
