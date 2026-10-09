@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 
+	"gorm.io/gorm"
+
 	"scrutineer/internal/db"
 	"scrutineer/internal/reflection"
 )
@@ -101,7 +103,8 @@ func (w *Worker) validateReflectionModel(repoID uint) error {
 
 func (w *Worker) reflectionSources(scan *db.Scan) ([]db.Scan, error) {
 	var sources []db.Scan
-	err := w.DB.Select("id, skill_name, status, `commit`").
+	// Standard quoting: PostgreSQL cannot lex MySQL/SQLite backticks.
+	err := w.DB.Select(`id, skill_name, status, "commit"`).
 		Where("repository_id = ? AND triage_scan_id = ? AND skill_name <> ? AND sub_path = '' AND ref = ''", scan.RepositoryID, *scan.TriageScanID, "reflect").
 		Order("id").Limit(reflection.MaxScans + 1).Find(&sources).Error
 	return sources, err
@@ -128,12 +131,24 @@ func (w *Worker) reflectionFinalizing(id uint) bool {
 	return ok
 }
 
+// reflectionWindowSQL is the prefix/tail/size projection over a scan log. The
+// tail needs a dialect split: SQLite's substr() counts a negative start from
+// the end, while PostgreSQL clamps it to the start and returns the whole log.
+// right() is the PostgreSQL equivalent; both yield the whole string when it is
+// shorter than the window.
+func reflectionWindowSQL(gdb *gorm.DB) string {
+	if gdb.Name() == string(db.DialectPostgres) {
+		return "substr(log, 1, ?) AS prefix, right(log, ?) AS tail, length(log) AS size"
+	}
+	return "substr(log, 1, ?) AS prefix, substr(log, -?) AS tail, length(log) AS size"
+}
+
 func (w *Worker) reflectionSource(scan db.Scan) (reflection.Source, error) {
 	var windows struct {
 		Prefix, Tail string
 		Size         int
 	}
-	result := w.DB.Model(&db.Scan{}).Select("substr(log, 1, ?) AS prefix, substr(log, -?) AS tail, length(log) AS size", reflection.Window, reflection.Window).
+	result := w.DB.Model(&db.Scan{}).Select(reflectionWindowSQL(w.DB), reflection.Window, reflection.Window).
 		Where("id = ?", scan.ID).Scan(&windows)
 	if result.Error != nil {
 		return reflection.Source{}, fmt.Errorf("read reflection transcript %d: %w", scan.ID, result.Error)
