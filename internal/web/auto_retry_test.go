@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -152,5 +154,124 @@ func TestAutoRetry_disabledWhenMaxIsZero(t *testing.T) {
 	f.failed(t, time.Hour, 0, "server restarted during run")
 	if n := f.s.autoRetryTick(context.Background(), f.now); n != 0 {
 		t.Errorf("retried %d with the pass disabled, want 0", n)
+	}
+}
+
+// An auto-retry must reproduce the failed scan, not a stripped copy of it.
+// retryScanColumns and the ScanOpts built from it are two places the same field
+// has to appear; a reflect scan missing TriageScanID cannot pass
+// prepareReflection, so its retry could only fail again.
+func TestAutoRetry_carriesTheTriageCohortLink(t *testing.T) {
+	f, done := newAutoRetryFixture(t)
+	defer done()
+
+	triage := db.Scan{RepositoryID: f.repo.ID, Kind: worker.JobSkill, SkillName: "triage",
+		Status: db.ScanDone, StatusPriority: db.StatusPriorityFor(db.ScanDone)}
+	if err := f.s.DB.Create(&triage).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	lost := f.failed(t, 10*time.Minute, 0, worker.AbandonedPrefix+"no heartbeat")
+	if err := f.s.DB.Model(&db.Scan{}).Where("id = ?", lost.ID).
+		Update("triage_scan_id", triage.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if n := f.s.autoRetryTick(context.Background(), f.now); n != 1 {
+		t.Fatalf("retried %d, want 1", n)
+	}
+	kids := f.queuedChildren(t, lost.ID)
+	if len(kids) != 1 {
+		t.Fatalf("children = %d, want 1", len(kids))
+	}
+	kid := kids[0]
+	if kid.TriageScanID == nil || *kid.TriageScanID != triage.ID {
+		t.Errorf("retry triage_scan_id = %v, want %d — the cohort link was dropped", kid.TriageScanID, triage.ID)
+	}
+}
+
+// Losing the exploration fields turns an auto-retried adversarial sweep back
+// into a plain deep dive. Exploration is only valid on security-deep-dive
+// (worker.ValidateExploration), hence the separate skill here.
+func TestAutoRetry_carriesTheExplorationContext(t *testing.T) {
+	f, done := newAutoRetryFixture(t)
+	defer done()
+
+	// ExplorationInstructions reads references/<mode>.md from the skill's
+	// source path, so an exploration-capable skill needs a reference pack.
+	source := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(source, "references"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "references", worker.ExplorationAdversarialSweep+".md"),
+		[]byte("sweep the target\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deep := db.Skill{Name: deepDiveSkillName, Description: "x", Body: "b", Active: true,
+		Source: "ui", SourcePath: source, Version: 1}
+	if err := f.s.DB.Create(&deep).Error; err != nil {
+		t.Fatal(err)
+	}
+	finished := f.now.Add(-10 * time.Minute)
+	lost := db.Scan{RepositoryID: f.repo.ID, Kind: worker.JobSkill, SkillID: &deep.ID, SkillName: deep.Name,
+		Status: db.ScanFailed, StatusPriority: db.StatusPriorityFor(db.ScanFailed),
+		Error: worker.AbandonedPrefix + "no heartbeat", FinishedAt: &finished,
+		ExplorationMode: worker.ExplorationAdversarialSweep, ExplorationPath: "cmd/server"}
+	if err := f.s.DB.Create(&lost).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if n := f.s.autoRetryTick(context.Background(), f.now); n != 1 {
+		t.Fatalf("retried %d, want 1", n)
+	}
+	kids := f.queuedChildren(t, lost.ID)
+	if len(kids) != 1 {
+		t.Fatalf("children = %d, want 1", len(kids))
+	}
+	if kid := kids[0]; kid.ExplorationMode != worker.ExplorationAdversarialSweep || kid.ExplorationPath != "cmd/server" {
+		t.Errorf("retry exploration = %q/%q, want %q/cmd/server",
+			kid.ExplorationMode, kid.ExplorationPath, worker.ExplorationAdversarialSweep)
+	}
+}
+
+// Without the feedback the verification re-runs without the note that prompted
+// it. A scan only persists feedback after passing normalizeVerificationOpts, so
+// a retry carrying SkillID and FindingID always satisfies that guard again.
+func TestAutoRetry_carriesVerificationFeedback(t *testing.T) {
+	f, done := newAutoRetryFixture(t)
+	defer done()
+
+	verify := db.Skill{Name: verifySkillName, Description: "x", Body: "b", Active: true, Source: "ui", Version: 1}
+	if err := f.s.DB.Create(&verify).Error; err != nil {
+		t.Fatal(err)
+	}
+	origin := db.Scan{RepositoryID: f.repo.ID, Kind: worker.JobSkill, SkillName: deepDiveSkillName,
+		Status: db.ScanDone, StatusPriority: db.StatusPriorityFor(db.ScanDone)}
+	if err := f.s.DB.Create(&origin).Error; err != nil {
+		t.Fatal(err)
+	}
+	finding := db.Finding{RepositoryID: f.repo.ID, ScanID: origin.ID, Title: "Parser issue",
+		Status: db.FindingEnriched, Severity: "High"}
+	if err := f.s.DB.Create(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	finished := f.now.Add(-10 * time.Minute)
+	lost := db.Scan{RepositoryID: f.repo.ID, Kind: worker.JobSkill, SkillID: &verify.ID, SkillName: verify.Name,
+		Status: db.ScanFailed, StatusPriority: db.StatusPriorityFor(db.ScanFailed),
+		Error: worker.AbandonedPrefix + "no heartbeat", FinishedAt: &finished,
+		FindingID: &finding.ID, VerificationFeedback: "recheck the auth boundary"}
+	if err := f.s.DB.Create(&lost).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if n := f.s.autoRetryTick(context.Background(), f.now); n != 1 {
+		t.Fatalf("retried %d, want 1", n)
+	}
+	kids := f.queuedChildren(t, lost.ID)
+	if len(kids) != 1 {
+		t.Fatalf("children = %d, want 1", len(kids))
+	}
+	if kid := kids[0]; kid.VerificationFeedback != "recheck the auth boundary" {
+		t.Errorf("retry verification_feedback = %q, want it carried over", kid.VerificationFeedback)
 	}
 }

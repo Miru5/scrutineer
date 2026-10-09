@@ -37,7 +37,8 @@ const (
 // automatic pass filters on.
 const retryScanColumns = "id, repository_id, skill_id, skill_name, model, effort, finding_id, " +
 	"remediation_attempt_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, " +
-	"scan_group, focus_area, backend, status, session_id, resumed_from_scan_id, import_payload, " +
+	"scan_group, focus_area, triage_scan_id, exploration_mode, exploration_path, " +
+	"verification_feedback, backend, status, session_id, resumed_from_scan_id, import_payload, " +
 	"auto_retries, error, finished_at"
 
 // newestAttemptPerTupleSQL keeps only the newest scan per (repository, skill,
@@ -128,6 +129,12 @@ func (s *Server) autoRetryTick(ctx context.Context, now time.Time) int {
 			DiffBaseScanID:       sc.DiffBaseScanID,
 			ScanGroup:            sc.ScanGroup,
 			FocusArea:            sc.FocusArea,
+			// Keep in lockstep with scanRetry and scansRetryFailed; a reflect
+			// scan without its TriageScanID cannot pass prepareReflection.
+			TriageScanID:         sc.TriageScanID,
+			ExplorationMode:      sc.ExplorationMode,
+			ExplorationPath:      sc.ExplorationPath,
+			VerificationFeedback: sc.VerificationFeedback,
 			SessionID:            sessionID,
 			ResumedFromScanID:    resumeOf,
 			ParentScanID:         &parent,
