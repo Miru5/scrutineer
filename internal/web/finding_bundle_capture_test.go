@@ -137,10 +137,14 @@ func TestStreamedPoCBundleUsesCapturedBytes(t *testing.T) {
 	}
 }
 
-func TestFindingBundleRejectsCorruptCapture(t *testing.T) {
+func TestFindingBundleFallsBackFromCorruptCapture(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	finding := setUpBundleFinding(t, s, false)
+	run := "#!/bin/sh\necho from-validation\n"
+	if err := s.DB.Model(finding).Update("validation", "```sh filename=run.sh\n"+run+"```\n").Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := s.DB.Create(&db.FindingPoC{FindingID: finding.ID, ScanID: finding.ScanID, Files: []byte(`[{"path":"../escape","data":"eA==","sha256":"bad"}]`)}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +152,19 @@ func TestFindingBundleRejectsCorruptCapture(t *testing.T) {
 	asOperator(r)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusInternalServerError || !strings.Contains(w.Body.String(), "captured PoC") {
+	if w.Code != http.StatusOK {
 		t.Fatalf("corrupt capture response=%d: %s", w.Code, w.Body.String())
+	}
+	files := readArchive(t, w.Body.Bytes())
+	if string(files["poc/run.sh"]) != run || files["poc-manifest.json"] != nil {
+		t.Fatalf("bundle did not fall back to validation: run.sh=%q", files["poc/run.sh"])
+	}
+	var manifest bundleManifest
+	if err := json.Unmarshal(files["manifest.json"], &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Warnings) != 1 || !strings.Contains(manifest.Warnings[0], "captured PoC") {
+		t.Errorf("manifest warnings = %q", manifest.Warnings)
 	}
 }
 

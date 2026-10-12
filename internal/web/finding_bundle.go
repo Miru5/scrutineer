@@ -172,7 +172,9 @@ func (s *Server) bundleEntriesAt(f *db.Finding, repo *db.Repository, generatedAt
 
 	var warnings []string
 	poc, captured, err := s.findingPoCEntries(f)
-	if err != nil {
+	if errors.Is(err, errCapturedPoC) {
+		warnings = append(warnings, fmt.Sprintf("%v. poc/ is rebuilt from the validation text.", err))
+	} else if err != nil {
 		return nil, fmt.Errorf("build PoC: %w", err)
 	}
 	if !captured {

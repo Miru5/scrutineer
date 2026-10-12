@@ -13,3 +13,7 @@ func singleLink(_ *os.File, info os.FileInfo) bool {
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	return ok && stat.Nlink == 1
 }
+
+func executable(info os.FileInfo, _ []byte) bool {
+	return info.Mode().Perm()&0o111 != 0
+}

@@ -435,3 +435,37 @@ func TestCaptureWarningPreservesAdvisoryVerdictsAndFailOn(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifyRunsWithoutUnreadableCapture(t *testing.T) {
+	gdb := dbtest.Open(t)
+	repo := db.Repository{URL: "https://example.com/poc", Name: "poc"}
+	verify := db.Skill{Name: "verify", Body: "verify", OutputFile: "report.json", OutputKind: "verify", Active: true}
+	for _, row := range []any{&repo, &verify} {
+		if err := gdb.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	source := db.Scan{RepositoryID: repo.ID, Status: db.ScanDone}
+	if err := gdb.Create(&source).Error; err != nil {
+		t.Fatal(err)
+	}
+	finding := db.Finding{ScanID: source.ID, RepositoryID: repo.ID, Title: "bug", Severity: "High", Location: "parser.go:1"}
+	if err := gdb.Create(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&db.FindingPoC{FindingID: finding.ID, ScanID: source.ID, Files: []byte(`[{"path":"../escape","data":"eA==","sha256":"bad"}]`)}).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := &Worker{DB: gdb, DataDir: t.TempDir(), Log: slog.New(slog.NewTextHandler(io.Discard, nil)), PrepareRepoSrc: stubPrepareRepoSrc}
+	w.Runner = pocTestRunner{run: func(job SkillJob) SkillResult {
+		if _, err := os.Stat(filepath.Join(job.WorkRoot, "poc-manifest.json")); !os.IsNotExist(err) {
+			t.Errorf("unreadable capture was staged: %v", err)
+		}
+		return SkillResult{Report: verificationReport(t, "inconclusive", nil)}
+	}}
+	scan := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, Status: db.ScanQueued, SkillID: &verify.ID, FindingID: &finding.ID}
+	runPoCTestJob(t, w, &scan)
+	if scan.Status != db.ScanDone {
+		t.Fatalf("verify status %s: %s", scan.Status, scan.Error)
+	}
+}

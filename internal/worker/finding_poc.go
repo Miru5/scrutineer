@@ -125,7 +125,9 @@ func (w *Worker) stageFindingPoC(workRoot string, scan *db.Scan, skill *db.Skill
 	}
 	files, err := poc.Decode(row.Files)
 	if err != nil {
-		return fmt.Errorf("load captured PoC: %w", err)
+		// Verify still has the reproducer text, as for a finding never captured.
+		w.Log.Warn("skip unreadable captured PoC", "finding", finding.ID, "scan", scan.ID, "err", err)
+		return nil
 	}
 	if err := writePoCFiles(workRoot, "poc/", files); err != nil {
 		return err

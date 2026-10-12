@@ -2,11 +2,16 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/poc"
 )
+
+// errCapturedPoC marks a stored capture that no longer decodes, so the bundle
+// can fall back to the validation text instead of failing.
+var errCapturedPoC = errors.New("read captured PoC")
 
 func (s *Server) findingPoCEntries(finding *db.Finding) ([]bundleEntry, bool, error) {
 	row, err := db.LoadFindingPoC(s.DB, finding.ID)
@@ -18,7 +23,7 @@ func (s *Server) findingPoCEntries(finding *db.Finding) ([]bundleEntry, bool, er
 	}
 	files, err := poc.Decode(row.Files)
 	if err != nil {
-		return nil, true, fmt.Errorf("read captured PoC: %w", err)
+		return nil, false, fmt.Errorf("%w: %w", errCapturedPoC, err)
 	}
 	var entries []bundleEntry
 	for _, file := range files {

@@ -196,5 +196,5 @@ func readFile(root *os.Root, name string) (File, error) {
 	if err != nil || len(data) > MaxFileBytes || int64(len(data)) != final.Size() || !after.ModTime().Equal(final.ModTime()) {
 		return File{}, fmt.Errorf("PoC file %q changed or exceeded the byte limit", name)
 	}
-	return File{Path: name, Data: data, SHA256: Digest(data), Executable: after.Mode().Perm()&0o111 != 0}, nil
+	return File{Path: name, Data: data, SHA256: Digest(data), Executable: executable(after, data)}, nil
 }

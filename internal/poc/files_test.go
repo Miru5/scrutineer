@@ -147,3 +147,18 @@ func TestDecodeRejectsConflictingPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestCaptureMarksScriptsExecutable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "run.sh"), []byte("#!/bin/sh\necho hi\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestFile(t, dir, "input.txt", []byte("data"))
+	files, err := captureTestDir(t, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0].Executable || !files[1].Executable {
+		t.Fatalf("capture = %+v", files)
+	}
+}
