@@ -9,6 +9,7 @@ import (
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
 	"scrutineer/internal/poc"
+	"scrutineer/internal/skills"
 	"scrutineer/internal/verification"
 )
 
@@ -30,22 +31,20 @@ const maxSchemaErrors = 8
 // ValidateSkillReport validates both a skill's JSON Schema and any
 // skill-specific semantic contract. Schema validation always runs first so a
 // malformed report keeps the established JSON/schema error path.
-func ValidateSkillReport(skillName, schemaJSON, report string) string {
+func ValidateSkillReport(skillName, schemaJSON, pocField, report string) string {
 	if detail := ValidateReportSchema(schemaJSON, report); detail != "" {
 		return detail
 	}
-	if detail := validateReportPoC(skillName, report); detail != "" {
+	if detail := validateReportPoC(pocField, report); detail != "" {
 		return detail
 	}
 	return ValidateReportSemantics(skillName, report)
 }
 
-func validateReportPoC(skillName, report string) string {
-	switch skillName {
-	case deepDiveSkillName, "advisory-deep-dive", verifySkillName,
-		"audit-injection", "audit-exfil", "audit-authz", "audit-pii", "audit-memory",
-		"audit-package-manager", "audit-web", "audit-embedded":
-	default:
+// validateReportPoC checks the report field a skill names in
+// scrutineer.poc_field.
+func validateReportPoC(pocField, report string) string {
+	if pocField == "" {
 		return ""
 	}
 	var parsed struct {
@@ -57,7 +56,7 @@ func validateReportPoC(skillName, report string) string {
 	if err := json.Unmarshal([]byte(report), &parsed); err != nil {
 		return "report.json is not valid JSON: " + err.Error()
 	}
-	if skillName == verifySkillName {
+	if pocField == skills.PoCFieldReproducer {
 		if err := poc.Validate(parsed.Reproducer); err != nil {
 			return "/reproducer: " + err.Error()
 		}

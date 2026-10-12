@@ -8,6 +8,7 @@ metadata:
   scrutineer.version: 1
   scrutineer.output_file: report.json
   scrutineer.output_kind: advisory_audit
+  scrutineer.poc_field: validation
   scrutineer.max_turns: 100
   scrutineer.model: max
   scrutineer.requires_remote: true

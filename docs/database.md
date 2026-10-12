@@ -224,6 +224,7 @@ One row per installed skill. Loaded from `skills/` directories on disk or the UI
 | requires_commands | text | Newline-joined executable names checked on the runner's PATH before model execution. Empty means no command requirements. |
 | requires_features | text | Newline-joined runtime feature names checked before model execution: `network-egress`, `docker-in-docker`, or `fuse`. Requirements do not grant capabilities. |
 | degraded_mode | boolean | Allows missing declared capabilities to produce a degraded run with partial coverage instead of blocking. Defaults to false; probe execution failures always block. |
+| poc_field | text | `validation`, `reproducer`, or empty. Set via `scrutineer.poc_field`; names the report field whose PoC Markdown is validated before ingestion. |
 | paths | text | Newline-joined shell-glob allow-list from `scrutineer.paths`. When non-empty, the skill sees only matching files inside the workspace `src/` and the builtin skip list is bypassed. |
 | ignore_paths | text | Newline-joined shell-glob deny-list from `scrutineer.ignore_paths`. Always layered on top of the active include set. |
 | source | text | `bundled`, `local`, `remote`, or `ui`. |

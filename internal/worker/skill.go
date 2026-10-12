@@ -362,7 +362,7 @@ func (w *Worker) parsePartialSkillReport(ctx context.Context, skill *db.Skill, s
 
 func (w *Worker) repairAndParseSkillOutput(ctx context.Context, skill *db.Skill, scan *db.Scan, sj SkillJob, report string, emit func(Event)) (string, error) {
 	if skill.SchemaJSON != "" {
-		if detail := ValidateSkillReport(skill.Name, skill.SchemaJSON, report); detail != "" {
+		if detail := ValidateSkillReport(skill.Name, skill.SchemaJSON, skill.PoCField, report); detail != "" {
 			if repairedReport, ok := w.repairSchemaReport(ctx, skill, scan, sj, report, detail, emit); ok {
 				report = repairedReport
 			}
@@ -395,7 +395,7 @@ func (w *Worker) repairSchemaReport(ctx context.Context, skill *db.Skill, scan *
 		emit(Event{Kind: KindError, Text: fmt.Sprintf("validation: repair attempt did not produce %s; parsing original output", outputFile)})
 		return "", false
 	}
-	if detail = ValidateSkillReport(skill.Name, skill.SchemaJSON, res.Report); detail == "" {
+	if detail = ValidateSkillReport(skill.Name, skill.SchemaJSON, skill.PoCField, res.Report); detail == "" {
 		emit(Event{Kind: KindText, Text: fmt.Sprintf("validation: repaired %s validates", outputFile)})
 		return res.Report, true
 	}
@@ -536,7 +536,7 @@ func reportValidationForParsing(skill *db.Skill, report string) (string, bool) {
 	if detail := ValidateReportSchema(skill.SchemaJSON, report); detail != "" {
 		return detail, false
 	}
-	if detail := validateReportPoC(skill.Name, report); detail != "" {
+	if detail := validateReportPoC(skill.PoCField, report); detail != "" {
 		return detail, false
 	}
 	detail := ValidateReportSemantics(skill.Name, report)
@@ -1587,7 +1587,7 @@ func (w *Worker) parseReconContext(reconScan db.Scan) (*skillContextRecon, error
 		}
 		return nil, fmt.Errorf("load recon schema: %w", err)
 	}
-	report, err := parseReconReport(reconSkill.Name, reconSkill.SchemaJSON, reconScan.Report)
+	report, err := parseReconReport(reconSkill.Name, reconSkill.SchemaJSON, reconSkill.PoCField, reconScan.Report)
 	if err != nil {
 		w.Log.Warn("ignore invalid recon report", "scan", reconScan.ID, "err", err)
 		return nil, nil
@@ -1595,8 +1595,8 @@ func (w *Worker) parseReconContext(reconScan db.Scan) (*skillContextRecon, error
 	return report, nil
 }
 
-func parseReconReport(skillName, schema, raw string) (*skillContextRecon, error) {
-	if detail := ValidateSkillReport(skillName, schema, raw); detail != "" {
+func parseReconReport(skillName, schema, pocField, raw string) (*skillContextRecon, error) {
+	if detail := ValidateSkillReport(skillName, schema, pocField, raw); detail != "" {
 		return nil, errors.New(detail)
 	}
 	var report skillContextRecon

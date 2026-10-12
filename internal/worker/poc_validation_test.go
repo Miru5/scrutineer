@@ -43,7 +43,7 @@ func TestDoSkillRepairsPoCFencesBeforePersisting(t *testing.T) {
 				t.Fatal(err)
 			}
 			if err := w.DB.Model(&db.Skill{}).Where("id = ?", *scan.SkillID).Updates(map[string]any{
-				"name": "audit-injection", "output_kind": "findings", "schema_json": schema,
+				"name": "audit-injection", "output_kind": "findings", "schema_json": schema, "poc_field": "validation",
 			}).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -94,29 +94,22 @@ func assertPersistedPoCReport(t *testing.T, w *Worker, repoID uint, scan db.Scan
 }
 
 func TestValidateSkillReportPoCScope(t *testing.T) {
-	for _, name := range []string{
-		deepDiveSkillName, "advisory-deep-dive", "audit-injection", "audit-exfil",
-		"audit-authz", "audit-pii", "audit-memory", "audit-package-manager", "audit-web", "audit-embedded",
-	} {
-		t.Run(name, func(t *testing.T) {
-			report := `{"findings":[{"validation":"--- input.ml ---\nlet () = ()"}]}`
-			if detail := ValidateSkillReport(name, `{"type":"object"}`, report); !strings.Contains(detail, "/findings/0/validation") {
-				t.Fatalf("validation = %q", detail)
-			}
-			if detail := ValidateSkillReport("custom-skill", `{"type":"object"}`, report); detail != "" {
-				t.Fatal(detail)
-			}
-		})
+	report := `{"findings":[{"validation":"--- input.ml ---\nlet () = ()"}]}`
+	if detail := ValidateSkillReport("custom-skill", `{"type":"object"}`, "validation", report); !strings.Contains(detail, "/findings/0/validation") {
+		t.Fatalf("validation = %q", detail)
+	}
+	if detail := ValidateSkillReport(deepDiveSkillName, `{"type":"object"}`, "", report); detail != "" {
+		t.Fatal(detail)
 	}
 }
 
 func TestVerifyPoCFencesUseStrictValidation(t *testing.T) {
 	schema := loadBundledSchema(t, "../../skills/verify/schema.json")
 	report := strings.Replace(confirmedVerificationReport(t), "go run ./poc.go", "--- poc.go ---", 1)
-	if detail := ValidateSkillReport(verifySkillName, schema, report); !strings.Contains(detail, "/reproducer") {
+	if detail := ValidateSkillReport(verifySkillName, schema, "reproducer", report); !strings.Contains(detail, "/reproducer") {
 		t.Fatalf("validation = %q", detail)
 	}
-	detail, recoverable := reportValidationForParsing(&db.Skill{Name: verifySkillName, SchemaJSON: schema}, report)
+	detail, recoverable := reportValidationForParsing(&db.Skill{Name: verifySkillName, SchemaJSON: schema, PoCField: "reproducer"}, report)
 	if !strings.Contains(detail, "/reproducer") || recoverable {
 		t.Fatalf("PoC formatting error treated as recoverable rubric error: %q, %v", detail, recoverable)
 	}
@@ -147,9 +140,9 @@ func TestBundledFindingSkillsChoosePoCValidation(t *testing.T) {
 		default:
 			continue
 		}
-		validated := validateReportPoC(skill.Name, invalid) != ""
+		validated := validateReportPoC(skill.PoCField, invalid) != ""
 		if validated == exempt[skill.Name] {
-			t.Errorf("%s: PoC validation = %v; add it to validateReportPoC or to the exempt list here", skill.Name, validated)
+			t.Errorf("%s: PoC validation = %v; set scrutineer.poc_field or add it to the exempt list here", skill.Name, validated)
 		}
 	}
 }

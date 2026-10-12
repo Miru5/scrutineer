@@ -21,7 +21,7 @@ func TestAPIValidateReportPoCFences(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
 	scan := seedScanWithSkill(t, s, skill.SchemaJSON)
-	if err := s.DB.Model(&db.Skill{}).Where("id = ?", *scan.SkillID).Update("name", "audit-injection").Error; err != nil {
+	if err := s.DB.Model(&db.Skill{}).Where("id = ?", *scan.SkillID).Updates(map[string]any{"name": "audit-injection", "poc_field": skill.PoCField}).Error; err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {

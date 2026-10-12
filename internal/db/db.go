@@ -1469,6 +1469,8 @@ type Skill struct {
 	RequiresCommands string `gorm:"type:text"`
 	RequiresFeatures string `gorm:"type:text"`
 	DegradedMode     bool
+	// PoCField is set via `scrutineer.poc_field`.
+	PoCField string `gorm:"column:poc_field"`
 
 	Source     string // "bundled" | "local" | "remote" | "ui"
 	SourcePath string // directory on disk (bundled/local/remote) or empty (ui)

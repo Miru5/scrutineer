@@ -6,6 +6,7 @@ metadata:
   scrutineer.version: 1
   scrutineer.output_file: report.json
   scrutineer.output_kind: findings
+  scrutineer.poc_field: validation
   scrutineer.max_turns: 120
   scrutineer.model: max
   scrutineer.recurse_submodules: true

@@ -102,7 +102,7 @@ func (r Runner) RunScenario(ctx context.Context, sc Scenario) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("%s: run %s: %w", sc.Path, sc.Skill, err)
 	}
-	if detail := worker.ValidateSkillReport(skill.Name, skill.SchemaJSON, res.Report); detail != "" {
+	if detail := worker.ValidateSkillReport(skill.Name, skill.SchemaJSON, skill.PoCField, res.Report); detail != "" {
 		return Result{}, fmt.Errorf("%s: %s failed report validation: %s", sc.Path, skill.OutputFile, detail)
 	}
 	matches, judgeCost, err := judgeScenario(ctx, judge, sc, res.Report)
