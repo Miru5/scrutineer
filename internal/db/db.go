@@ -399,7 +399,9 @@ type Scan struct {
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 	CostUSD    float64
-	Turns      int
+	// SessionCostUSD is the highest reported cumulative cost of the harness session.
+	SessionCostUSD float64 `gorm:"not null;default:0"`
+	Turns          int
 	// Token usage from the claude-code result event. CacheWriteTokens is
 	// cache_creation_input_tokens; CacheReadTokens is
 	// cache_read_input_tokens. AutoMigrate adds these as zero-default
