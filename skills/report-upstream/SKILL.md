@@ -44,11 +44,13 @@ Derive `{owner}/{repo}` from `repository.full_name` (fall back to parsing the pa
 Write `./advisory.json` with the GitHub `/reports` body. Field-by-field:
 
 - `summary` — the finding's `title`. Trim to 1024 characters; GitHub rejects longer.
-- `description` — the finding's `disclosure_draft`, then a `## Proposed fix` section, then a final marker line. See below.
+- `description` — the finding's `disclosure_draft`, then the proposed fix (its own `## Proposed fix` section, or inside the custom report form when the upstream defines one), then a final marker line. See below.
 - `vulnerabilities[]` — build from `GET {api_base}/repositories/{repository_id}/packages` using the GHSA ecosystem mapping (rubygems, npm, pip, maven, nuget, composer, go, rust, erlang, actions, pub, swift, other). One entry per package; `vulnerable_version_range` from the finding's `affected` field, normalised to comma-separated `OP VERSION` clauses or omitted if it cannot be reduced to that shape. If the repository has no packages, send `[{"package": {"ecosystem": "other", "name": "{owner}/{repo}"}}]` — the endpoint requires at least one entry.
 - `cwe_ids` — split the finding's `cwe` field on commas into an array of `CWE-N` strings. Omit if empty.
 - `cvss_vector_string` — the finding's `cvss_vector` when set; otherwise omit and send `severity` instead (the finding's `severity` lowercased to `critical`/`high`/`medium`/`low`). Never send both.
 - `start_private_fork` — `true`.
+
+Before assembling the description, check whether the upstream defines a custom private vulnerability reporting form, with the same lookup `disclose` uses, and keep the first one found: `./src/.github/VULNERABILITY_REPORT.yml`, then `./src/.github/VULNERABILITY_REPORT.yaml`, then the owner's `.github` repository with `gh api repos/{owner}/.github/contents/.github/VULNERABILITY_REPORT.yml -H 'Accept: application/vnd.github.raw+json'`, then the same path with `.yaml`. A 404 means no form at that location. Any other failure means the form could not be checked: refuse with the failure in `error`, because the description is assembled differently when a form applies. A form applies when the file parses into a non-empty `body` list, and `disclose` has then written `disclosure_draft` as one `### {label}` section per element other than `markdown`, which GitHub validates on submission.
 
 For the `## Proposed fix` section: when `suggested_fix` on the finding is non-empty, append to the description:
 
@@ -64,7 +66,9 @@ The diff below applies against commit `{suggested_fix_commit}`.
 
 When `suggested_fix` is empty, append `## Proposed fix\n\nNo patch is attached. {one sentence saying why: the patch skill has not run, or its output did not pass scrutineer's applicability gate.}` so the maintainer knows it was considered.
 
-GitHub caps `description` at 65535 characters. If the assembled description exceeds that, drop the diff block (keep the prose explaining a diff is available on request) and try again. If it still exceeds the cap, truncate `disclosure_draft` from the bottom and note `truncated: true` in `report.json`.
+When a form applies, a heading would add a section the form does not define or close off the form's last one, so append no section after the draft. Put the same content without the `## Proposed fix` line, its first sentence prefixed with `Proposed fix: `, at the end of the form's free-text section (the `textarea` such as "Details" or "Additional information" that `disclose` folds leftover content into), or at the end of the last section when the form has none.
+
+GitHub caps `description` at 65535 characters. If the assembled description exceeds that, drop the diff block (keep the prose explaining a diff is available on request) and try again. If it still exceeds the cap, truncate `disclosure_draft` from the bottom and note `truncated: true` in `report.json`. When a form applies, never cut across a `### ` section boundary: shorten the longest `textarea` section from its bottom instead, and keep every heading, checkbox line and dropdown answer, with each answer still at its `min_length`. If the description cannot reach the cap that way, refuse rather than file a draft the form rejects.
 
 End the description with a final line `[scrutineer-finding:{finding_id}]` so re-runs can recognise this advisory and the staging issue filed by `fork` carries the same marker.
 
@@ -76,7 +80,7 @@ gh api -X POST repos/{owner}/{repo}/security-advisories/reports --input ./adviso
 
 This is the external-reporter endpoint; do not use the bare `/security-advisories` admin endpoint, which only works for repo admins. Capture `ghsa_id` and `html_url` from the response.
 
-A 422 with `Private vulnerability reporting is disabled` means PVR was turned off between the precondition check and the POST; treat as a refusal. A 422 mentioning a specific field (`vulnerabilities`, `cvss_vector_string`) means the body shape was rejected; fix the named field (drop `vulnerable_version_range`, drop `cvss_vector_string` in favour of `severity`) and retry once. Any other non-2xx is a refusal with the response body in `error`.
+A 422 with `Private vulnerability reporting is disabled` means PVR was turned off between the precondition check and the POST; treat as a refusal. A 422 whose `errors[].code` is `missing_section`, `empty_section`, `unchecked_required_option` or `sections_out_of_order` means the description does not answer the repository's custom report form: do not edit the description and do not retry, refuse with every such error's `code`, `section` and `option` in `error`, and tell the operator to complete the draft (or re-run `disclose`, which shapes it to the form) before filing again. A 422 mentioning another specific field (`vulnerabilities`, `cvss_vector_string`) means the body shape was rejected; fix the named field (drop `vulnerable_version_range`, drop `cvss_vector_string` in favour of `severity`) and retry once. Any other non-2xx is a refusal with the response body in `error`.
 
 ## 3. Push the patch to the temporary private fork
 
