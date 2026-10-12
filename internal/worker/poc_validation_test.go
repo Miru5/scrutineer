@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"scrutineer/internal/db"
 	"scrutineer/internal/queue"
+	"scrutineer/internal/skills"
 )
 
 func TestDoSkillRepairsPoCFencesBeforePersisting(t *testing.T) {
@@ -117,5 +119,37 @@ func TestVerifyPoCFencesUseStrictValidation(t *testing.T) {
 	detail, recoverable := reportValidationForParsing(&db.Skill{Name: verifySkillName, SchemaJSON: schema}, report)
 	if !strings.Contains(detail, "/reproducer") || recoverable {
 		t.Fatalf("PoC formatting error treated as recoverable rubric error: %q, %v", detail, recoverable)
+	}
+}
+
+// Every bundled skill that reports findings either has its PoC Markdown
+// validated or is listed here as exempt, so a new skill cannot skip
+// validation unnoticed.
+func TestBundledFindingSkillsChoosePoCValidation(t *testing.T) {
+	exempt := map[string]bool{
+		// Tool scanners write validation text from a script.
+		"semgrep": true, "bandit": true, "zizmor": true, "betterleaks": true,
+		// These model skills use their own finding formats.
+		"ingest": true, "reachability": true, "variants": true, "vuln-scan": true,
+	}
+	paths, err := filepath.Glob(filepath.Join("..", "..", "skills", "*", "SKILL.md"))
+	if err != nil || len(paths) == 0 {
+		t.Fatalf("glob skills: %v", err)
+	}
+	invalid := `{"findings":[{"validation":"--- run.sh ---\necho hi"}],"reproducer":"--- run.sh ---\necho hi"}`
+	for _, path := range paths {
+		skill, err := skills.ParseFile(path)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		switch skill.OutputKind {
+		case "findings", "advisory_audit", "verify":
+		default:
+			continue
+		}
+		validated := validateReportPoC(skill.Name, invalid) != ""
+		if validated == exempt[skill.Name] {
+			t.Errorf("%s: PoC validation = %v; add it to validateReportPoC or to the exempt list here", skill.Name, validated)
+		}
 	}
 }
