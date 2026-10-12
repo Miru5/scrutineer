@@ -22,7 +22,7 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `subprojects` | Enumerates monorepo packages and workspaces so deep-dive scans can be scoped to a sub-path. |
 | `maintainers` | Identifies who actually maintains the repo and the best contact route for a security report, distinguishing leads from drive-by contributors and bots. |
 | `posture` | Scores readiness to receive a vulnerability report: SECURITY.md, private vulnerability reporting, prior advisories, scanning workflows. |
-| `compliance` | Audits the repository against the 62 OpenSSF Baseline controls with `darnit`, resolves the controls darnit defers to LLM analysis or could not verify without a forge token, and records the per-control verdicts plus the attained Baseline level on the repository. Run on demand. |
+| `compliance` | Audits the repository against the OpenSSF Baseline controls with `darnit`, resolves the controls darnit defers to LLM analysis or could not verify without a forge token, and records the per-control verdicts plus the attained Baseline level on the repository. Run on demand. |
 | `forensics` | Builds a read-only compromise timeline and evidence bundle from local Git history and public forge/archive records. Run on demand after suspected maintainer, account, release, or source-history compromise. |
 | `variants` | Starting from one confirmed finding, searches the current repository for distinct, high-confidence sibling instances of the same root cause. Run on demand; it does not scan dependents. |
 | `audit-injection` | Focused static audit for attacker-controlled data reaching command execution, dynamic evaluation, unsafe deserialization, or server-side template execution. Uses ecosystem-specific reference notes and runs on demand. |

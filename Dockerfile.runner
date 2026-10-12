@@ -82,10 +82,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # semgrep bump drag the others' dependencies with it.
 # darnit-mcp is a metapackage whose dependencies carry no version, so the
 # packages the audit runs (darnit-core, darnit-baseline) are pinned with it.
-# darnit's 0.1.0 wheel ships without openssf-baseline.toml, which
-# get_framework_config_path resolves two directories above the package (three
-# above its own module file), next to the templates/ the TOML loads relative
-# to itself; the release sdist carries both, so they are taken from there.
 # cel-python's c7nlib imports packaging without declaring it.
 # Smoke-test required CLIs at build time so missing packages, broken venv
 # symlinks or a misplaced framework TOML fail the image build instead of
@@ -100,12 +96,7 @@ RUN python3 -m venv /opt/semgrep && \
     python3 -m venv /opt/darnit && \
     /opt/darnit/bin/pip install --no-cache-dir "darnit-mcp==${DARNIT_VERSION}" "darnit-core==${DARNIT_VERSION}" "darnit-baseline==${DARNIT_VERSION}" packaging && \
     ln -s /opt/darnit/bin/darnit /usr/local/bin/darnit && \
-    darnit_lib="$(/opt/darnit/bin/python -c 'import darnit_baseline, pathlib; print(pathlib.Path(darnit_baseline.__file__).parent.parent.parent)')" && \
-    /opt/darnit/bin/pip download --no-cache-dir --no-deps --no-binary :all: -d /tmp/darnit-sdist "darnit-baseline==${DARNIT_VERSION}" && \
-    tar -xzf "/tmp/darnit-sdist/darnit_baseline-${DARNIT_VERSION}.tar.gz" -C "${darnit_lib}" --strip-components=1 \
-        "darnit_baseline-${DARNIT_VERSION}/openssf-baseline.toml" "darnit_baseline-${DARNIT_VERSION}/templates" && \
-    rm -rf /tmp/darnit-sdist && \
-    darnit validate "${darnit_lib}/openssf-baseline.toml" && \
+    /opt/darnit/bin/python -c 'import sys; from darnit.config import load_framework_config, validate_framework_config; from darnit_baseline.implementation import OSPSBaselineImplementation; errors = validate_framework_config(load_framework_config(OSPSBaselineImplementation().get_framework_config_path())); sys.exit("\n".join(map(str, errors)) if errors else 0)' && \
     python3 --version && \
     jq --version && \
     jsonschema --version && \
