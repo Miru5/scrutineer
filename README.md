@@ -181,7 +181,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `reachability` | Traces dependency sinks through application code to determine which are reachable from trust boundaries |
 | `cna-match` | Matches a repository to its CVE Numbering Authority so disclosures route to the right contact |
 | `posture` | Records the repo's security posture (reporting policy, response history, hardening) on the Repository row |
-| `compliance` | Audits the repo against the 62 OpenSSF Baseline controls with `darnit`, resolves the controls darnit defers to LLM analysis or could not verify without a forge token, and records per-control verdicts and the attained Baseline level on the Compliance tab |
+| `compliance` | Audits the repo against the OpenSSF Baseline controls with `darnit`, resolves the controls darnit defers to LLM analysis or could not verify without a forge token, and records per-control verdicts and the attained Baseline level on the Compliance tab |
 | `forensics` | Read-only compromise timeline and evidence bundle from local Git history and public forge/archive records |
 | `variants` | Starting from one confirmed finding, searches the current repository for distinct, high-confidence sibling instances of the same root cause |
 | `audit-injection` | Opt-in static audit for command/code execution, unsafe deserialization, and server-side template injection with ecosystem-specific references |
