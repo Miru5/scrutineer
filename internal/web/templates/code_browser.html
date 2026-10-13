@@ -27,7 +27,7 @@
 {{end}}
 {{if and .Missing .Local}}
   <div class="rounded border border-dashed p-6 text-sm text-muted-foreground">
-    <code>{{.Repo.LocalPath}}</code> is not a git repository, so the code browser cannot show its committed content.
+    <code>{{.Repo.LocalPath}}</code> no longer exists or is no longer a git repository, so the code browser cannot show its committed content.
   </div>
 {{else if .Missing}}
   <div class="rounded border border-dashed p-6 text-sm text-muted-foreground">

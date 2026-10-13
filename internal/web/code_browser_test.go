@@ -545,8 +545,8 @@ func TestRepoBlob_localRepositoryWithoutGitExplainsWhy(t *testing.T) {
 		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, "is not a git repository") {
-		t.Errorf("body missing the not-a-git-repository notice:\n%s", body)
+	if !strings.Contains(body, "no longer exists or is no longer a git repository") {
+		t.Errorf("body missing the missing-repository notice:\n%s", body)
 	}
 	if strings.Contains(body, "No local clone") {
 		t.Errorf("body rendered the cache notice for a local repository:\n%s", body)
