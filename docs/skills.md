@@ -250,7 +250,7 @@ When a scan starts, the worker creates `./data/work/scan-{id}/` with:
     ./scripts/                   copy of the skill's scripts/, so `bash scripts/foo.sh` resolves from cwd
     ./report.json                the skill writes its output here
 
-`./src/` is copied from a per-URL persistent clone under `./data/work/repo-cache/<sha256(url)>/src/` so the second scan of the same repository only fetches the delta. The cache is shallow by default and is deepened on demand when the code browser needs to resolve a historical commit for `/repositories/{id}/blob/{commit}/{path}`.
+`./src/` is copied from a per-URL persistent clone under `./data/work/repo-cache/<sha256(url)>/src/` so the second scan of the same repository only fetches the delta. The cache is shallow by default and is deepened on demand when the code browser needs to resolve a historical commit for `/repositories/{id}/blob/{commit}/{path}`. Local (`file://`) repositories skip the cache: `./src/` is a copy of the working tree, and the code browser reads committed content from the local checkout's own history, so edits that were not committed at scan time are not shown there.
 
 The worker then runs `claude -p "Use the {name} skill in this workspace"` with the working directory set to the workspace root. Anything the skill writes outside `./report.json` is discarded when the workspace is cleaned. Write intermediate files under `./` rather than `/tmp`; concurrent scans share `/tmp` in the container runner.
 
