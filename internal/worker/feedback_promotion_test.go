@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -365,5 +366,221 @@ func TestThreatModelSkillStagedWithoutPromotions(t *testing.T) {
 	}
 	if !strings.Contains(staged, `"model item"`) {
 		t.Fatalf("threat-model skill lost model-authored items: %s", staged)
+	}
+}
+
+func (p *promotionFixture) newDiveScan(commit, mode, subPath string) *db.Scan {
+	p.t.Helper()
+	scan := &db.Scan{RepositoryID: p.repo.ID, Kind: JobSkill, SkillName: deepDiveSkillName, Commit: commit, RescanMode: mode, SubPath: subPath}
+	if err := p.w.DB.Create(scan).Error; err != nil {
+		p.t.Fatal(err)
+	}
+	return scan
+}
+
+func (p *promotionFixture) parseDive(scan *db.Scan, report string) error {
+	p.t.Helper()
+	p.events = nil
+	skill := &db.Skill{Name: deepDiveSkillName, OutputKind: "findings"}
+	return p.w.parseFindingsOutput(skill, scan, report, func(e Event) { p.events = append(p.events, e) })
+}
+
+// diveReport builds a deep-dive report whose inventory has S1 at parse.go and
+// S2 at other.go and whose single ruled_out entry cites ids for sinks.
+func diveReport(reason, sinks, ids string) string {
+	return fmt.Sprintf(`{"inventory":[{"id":"S1","location":"parse.go:10"},{"id":"S2","location":"other.go:3"}],`+
+		`"ruled_out":[{"sinks":%s,"step":2,"reason":%q,"analyst_feedback_ids":%s}],"findings":[]}`, sinks, reason, ids)
+}
+
+func (p *promotionFixture) citeDive(commit string) {
+	p.t.Helper()
+	ids := fmt.Sprintf("[%d]", p.reviewID)
+	if err := p.parseDive(p.newDiveScan(commit, db.ScanRescanModeDiff, ""), diveReport("bound holds", `["S1"]`, ids)); err != nil {
+		p.t.Fatal(err)
+	}
+}
+
+func (p *promotionFixture) sources() []string {
+	p.t.Helper()
+	var rows []db.FeedbackConfirmation
+	if err := p.w.DB.Order("id").Find(&rows).Error; err != nil {
+		p.t.Fatal(err)
+	}
+	var out []string
+	for _, r := range rows {
+		out = append(out, r.Source+"@"+r.Commit)
+	}
+	return out
+}
+
+func TestDeepDiveRecordsConfirmation(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	p.citeDive("c1")
+	if got := p.sources(); len(got) != 1 || got[0] != "security-deep-dive@c1" {
+		t.Fatalf("confirmations = %v", got)
+	}
+	var c db.FeedbackConfirmation
+	if err := p.w.DB.First(&c).Error; err != nil || c.FindingID != p.source.ID || c.ReviewID != p.reviewID {
+		t.Fatalf("confirmation = %+v, %v", c, err)
+	}
+}
+
+func TestDeepDiveRecordsNothing(t *testing.T) {
+	id := "%d"
+	tests := []struct {
+		name   string
+		mode   string
+		sub    string
+		report string
+	}{
+		{"ids only in reason", db.ScanRescanModeDiff, "", diveReport("analyst_feedback: "+id, `["S1"]`, `[]`)},
+		{"full mode", db.ScanRescanModeFull, "", diveReport("r", `["S1"]`, "["+id+"]")},
+		{"sinks in other files", db.ScanRescanModeDiff, "", diveReport("r", `["S2"]`, "["+id+"]")},
+		{"unknown sink", db.ScanRescanModeDiff, "", diveReport("r", `["S9"]`, "["+id+"]")},
+		{"unknown id", db.ScanRescanModeDiff, "", diveReport("r", `["S1"]`, `[9999]`)},
+		{"zero id", db.ScanRescanModeDiff, "", diveReport("r", `["S1"]`, `[0]`)},
+		{"sub_path shifts the sink file", db.ScanRescanModeDiff, "lib", diveReport("r", `["S1"]`, "["+id+"]")},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPromotionFixture(t, promotionModel)
+			report := strings.ReplaceAll(tc.report, id, fmt.Sprint(p.reviewID))
+			if err := p.parseDive(p.newDiveScan("c1", tc.mode, tc.sub), report); err != nil {
+				t.Fatal(err)
+			}
+			if p.confirmations() != 0 {
+				t.Fatalf("confirmations = %v", p.sources())
+			}
+		})
+	}
+}
+
+func TestDeepDiveIneligibleReviewRecordsNothing(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	if err := db.WriteFindingField(p.w.DB, p.source.ID, "status", string(db.FindingNew), db.SourceAnalyst, "analyst"); err != nil {
+		t.Fatal(err)
+	}
+	p.citeDive("c1")
+	if p.confirmations() != 0 {
+		t.Fatalf("confirmations = %v", p.sources())
+	}
+}
+
+func TestDeepDiveSubPathResolvesSinkFile(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	// Sink locations are relative to the scan's sub_path, so parse.go:10 in a
+	// lib/ scan is the repository file lib/parse.go.
+	if err := p.w.DB.Model(&db.FindingReview{}).Where("id = ?", p.reviewID).Update("finding_path", "lib/parse.go").Error; err != nil {
+		t.Fatal(err)
+	}
+	report := diveReport("r", `["S1"]`, fmt.Sprintf("[%d]", p.reviewID))
+	if err := p.parseDive(p.newDiveScan("c1", db.ScanRescanModeDiff, "lib"), report); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.sources(); len(got) != 1 {
+		t.Fatalf("confirmations = %v", got)
+	}
+}
+
+func TestDeepDiveCountsReviewOncePerScan(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	report := fmt.Sprintf(`{"inventory":[{"id":"S1","location":"parse.go:10"},{"id":"S3","location":"parse.go:40"}],`+
+		`"ruled_out":[{"sinks":["S1"],"step":2,"reason":"a","analyst_feedback_ids":[%[1]d,%[1]d]},`+
+		`{"sinks":["S3"],"step":2,"reason":"b","analyst_feedback_ids":[%[1]d]}],"findings":[]}`, p.reviewID)
+	scan := p.newDiveScan("c1", db.ScanRescanModeDiff, "")
+	if err := p.parseDive(scan, report); err != nil {
+		t.Fatal(err)
+	}
+	var confirmed int
+	for _, e := range p.events {
+		if strings.Contains(e.Text, "confirmed at") {
+			confirmed++
+		}
+	}
+	if confirmed != 1 || p.confirmations() != 1 {
+		t.Fatalf("events = %d confirmations = %v", confirmed, p.sources())
+	}
+	if err := p.parseDive(scan, report); err != nil {
+		t.Fatal(err)
+	}
+	if p.confirmations() != 1 {
+		t.Fatalf("re-parse double counted: %v", p.sources())
+	}
+}
+
+func TestDeepDiveAloneNeverPromotes(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	for _, c := range []string{"c1", "c2", "c3", "c4"} {
+		p.citeDive(c)
+	}
+	if len(promotedItems(t, p.model())) != 0 {
+		t.Fatalf("promoted without a revalidate: %s", p.model())
+	}
+	var waited bool
+	for _, e := range p.events {
+		waited = waited || strings.Contains(e.Text, "waits for a revalidate confirmation")
+	}
+	if !waited {
+		t.Fatalf("events = %+v, want a waiting notice", p.events)
+	}
+	// One revalidate at another commit completes the requirement.
+	p.cite("c5")
+	if len(promotedItems(t, p.model())) != 1 {
+		t.Fatalf("not promoted after a revalidate: %s", p.model())
+	}
+}
+
+func TestDeepDiveAndRevalidateReachThreshold(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	p.citeDive("c1")
+	p.citeDive("c2")
+	p.cite("c3")
+	if len(promotedItems(t, p.model())) != 1 {
+		t.Fatalf("not promoted: %s", p.model())
+	}
+}
+
+func TestDeepDiveAndRevalidateAtSameCommitCountOnce(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	p.citeDive("c1")
+	p.cite("c1")
+	p.citeDive("c2")
+	p.cite("c2")
+	if p.confirmations() != 4 || len(promotedItems(t, p.model())) != 0 {
+		t.Fatalf("confirmations = %v model = %s", p.sources(), p.model())
+	}
+	p.cite("c3")
+	if len(promotedItems(t, p.model())) != 1 {
+		t.Fatalf("not promoted at three commits: %s", p.model())
+	}
+}
+
+func TestDeepDiveConfirmsAfterFailOnThreshold(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	report := fmt.Sprintf(`{"inventory":[{"id":"S1","location":"parse.go:10"}],`+
+		`"ruled_out":[{"sinks":["S1"],"step":2,"reason":"r","analyst_feedback_ids":[%d]}],`+
+		`"findings":[{"id":"F1","title":"x","severity":"Critical","cwe":"CWE-1","location":"a.go:1"}]}`, p.reviewID)
+	skill := &db.Skill{Name: deepDiveSkillName, OutputKind: "findings", FailOn: "High"}
+	err := p.w.parseFindingsOutput(skill, p.newDiveScan("c1", db.ScanRescanModeDiff, ""), report, func(Event) {})
+	var fe *FailOnThresholdError
+	if !errors.As(err, &fe) || p.confirmations() != 1 {
+		t.Fatalf("err = %v confirmations = %v", err, p.sources())
+	}
+}
+
+func TestDeepDiveBookkeepingFailureKeepsParse(t *testing.T) {
+	p := newPromotionFixture(t, promotionModel)
+	if err := p.w.DB.Migrator().DropTable(&db.FeedbackConfirmation{}); err != nil {
+		t.Fatal(err)
+	}
+	p.citeDive("c1")
+	var errs int
+	for _, e := range p.events {
+		if e.Kind == KindError {
+			errs++
+		}
+	}
+	if errs != 1 {
+		t.Fatalf("error events = %d", errs)
 	}
 }

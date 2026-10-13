@@ -547,6 +547,10 @@ func reportValidationForParsing(skill *db.Skill, report string) (string, bool) {
 // creating a duplicate, so analyst triage state survives a rescan (#75).
 func (w *Worker) parseFindingsOutput(skill *db.Skill, scan *db.Scan, report string, emit func(Event)) error {
 	_, err := w.ingestFindings(skill, scan, report, emit)
+	var failOn *FailOnThresholdError
+	if err == nil || errors.As(err, &failOn) {
+		w.recordDeepDiveFeedbackConfirmations(skill, scan, report, emit)
+	}
 	return err
 }
 

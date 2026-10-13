@@ -7,15 +7,23 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// FeedbackConfirmation records that a revalidate scan independently re-checked
-// a finding and relied on one analyst decision. The unique (review, scan) index
-// keeps retried or re-parsed scans from counting twice.
+// Sources of a feedback confirmation. Rows written before the column existed
+// read back as revalidate through the column default.
+const (
+	FeedbackSourceRevalidate = "revalidate"
+	FeedbackSourceDeepDive   = "security-deep-dive"
+)
+
+// FeedbackConfirmation records that a revalidate or diff-mode deep-dive scan
+// independently re-checked code and relied on one analyst decision. The unique
+// (review, scan) index keeps retried or re-parsed scans from counting twice.
 type FeedbackConfirmation struct {
 	ID        uint   `gorm:"primarykey"`
 	ReviewID  uint   `gorm:"not null;index;uniqueIndex:idx_feedback_confirmation_scan,priority:1"`
 	ScanID    uint   `gorm:"not null;uniqueIndex:idx_feedback_confirmation_scan,priority:2"`
 	FindingID uint   `gorm:"not null;index"`
 	Commit    string `gorm:"not null"`
+	Source    string `gorm:"not null;default:revalidate"`
 	CreatedAt time.Time
 }
 
@@ -43,4 +51,15 @@ func DistinctConfirmedCommits(confirmations []FeedbackConfirmation, sourceCommit
 		}
 	}
 	return len(seen)
+}
+
+// HasRevalidateConfirmation reports whether a revalidate scan confirmed the
+// decision at a commit other than the one the analyst originally reviewed.
+func HasRevalidateConfirmation(confirmations []FeedbackConfirmation, sourceCommit string) bool {
+	for _, c := range confirmations {
+		if c.Source == FeedbackSourceRevalidate && c.Commit != "" && c.Commit != sourceCommit {
+			return true
+		}
+	}
+	return false
 }

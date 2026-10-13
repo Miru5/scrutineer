@@ -88,3 +88,37 @@ func TestEligibleFeedbackForReviewsRejectsReopenedAndOtherVerdicts(t *testing.T)
 		t.Fatalf("reopened eligible: %+v", rows)
 	}
 }
+
+func TestFeedbackConfirmationSourceDefaultsToRevalidate(t *testing.T) {
+	gdb, f := feedbackFixture(t)
+	c := FeedbackConfirmation{ReviewID: 1, ScanID: 2, FindingID: f.ID, Commit: "c1"}
+	if _, err := RecordFeedbackConfirmation(gdb, &c); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := FeedbackConfirmations(gdb, 1)
+	if err != nil || len(rows) != 1 || rows[0].Source != FeedbackSourceRevalidate {
+		t.Fatalf("rows = %+v, %v", rows, err)
+	}
+}
+
+func TestHasRevalidateConfirmation(t *testing.T) {
+	dive := FeedbackConfirmation{Commit: "c1", Source: FeedbackSourceDeepDive}
+	reval := func(commit string) FeedbackConfirmation {
+		return FeedbackConfirmation{Commit: commit, Source: FeedbackSourceRevalidate}
+	}
+	tests := []struct {
+		name string
+		rows []FeedbackConfirmation
+		want bool
+	}{
+		{"none", nil, false},
+		{"deep dive only", []FeedbackConfirmation{dive}, false},
+		{"revalidate at the source commit", []FeedbackConfirmation{reval("src")}, false},
+		{"revalidate elsewhere", []FeedbackConfirmation{dive, reval("c2")}, true},
+	}
+	for _, tc := range tests {
+		if got := HasRevalidateConfirmation(tc.rows, "src"); got != tc.want {
+			t.Errorf("%s: got %v want %v", tc.name, got, tc.want)
+		}
+	}
+}
