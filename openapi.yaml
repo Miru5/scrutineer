@@ -1855,8 +1855,8 @@ components:
     FindingExport:
       description: |
         Full db.Finding row used by the operator JSONL export. Adds
-        the dedup, denormalised, and timestamp columns that the bearer-only
-        FindingDetail leaves out.
+        the dedup, denormalised, release, triage, fix, federation and
+        timestamp columns that the bearer-only FindingDetail leaves out.
       allOf:
         - $ref: '#/components/schemas/FindingDetail'
         - type: object
@@ -1875,6 +1875,22 @@ components:
             last_seen_scan_id: { type: integer, format: int64 }
             last_seen_commit:  { type: string }
             seen_count:        { type: integer }
+            missed_count:      { type: integer, description: "Consecutive same-skill full-repository rescans that did not report the finding again." }
+            last_missed_scan_id: { type: integer, format: int64, description: "Latest rescan that did not report the finding; 0 when none has." }
+            confidence:        { type: string, description: "How certain the producing audit is: high, medium or low. Empty when not reported." }
+            locations:         { type: string, description: "Newline-joined file:line positions when one rule fired at many places. The first entry is also in location." }
+            snippet:           { type: string, description: "Source excerpt around location, captured at ingest. Empty when it could not be read." }
+            imported_from:     { type: string, description: "External producer for findings that arrived through /import, such as CodeQL. Empty for findings Scrutineer produced." }
+            released_at:       { type: string, format: date-time, nullable: true, description: "When the upstream release that first contained the fix was published." }
+            release_tag:       { type: string, description: "Tag of the upstream release that first contained the fix." }
+            release_url:       { type: string, description: "URL of the upstream release that first contained the fix." }
+            federation_claim_contacts: { type: string, description: "Comma-joined peer contacts returned by the last federation claim-check that found the same finding elsewhere." }
+            federation_claim_at: { type: string, format: date-time, nullable: true, description: "When that federation claim was recorded." }
+            last_revalidate_verdict: { type: string, enum: [true_positive, false_positive, already_fixed, uncertain, ""], description: "Latest revalidate verdict. Empty when revalidate has not run." }
+            suggested_fix:     { type: string, description: "Unified diff from the patch skill that passed the applicability gate. Empty when none." }
+            suggested_fix_commit: { type: string, description: "Commit the suggested fix applies to." }
+            breaking_change:   { type: string, enum: [breaking, non_breaking, unknown, ""], description: "Breaking-change verdict for the suggested fix. Empty when the skill has not run." }
+            breaking_change_rationale: { type: string, description: "Prose explaining the breaking-change verdict." }
             created_at:        { type: string, format: date-time }
             updated_at:        { type: string, format: date-time }
 

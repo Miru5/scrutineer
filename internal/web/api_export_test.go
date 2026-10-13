@@ -652,6 +652,126 @@ func TestExportFindings_emptyDB(t *testing.T) {
 	}
 }
 
+// TestFindingExportCoversEveryFindingsColumn compares the export's keys with
+// the migrated findings table so a new db.Finding column cannot be left out of
+// the operator export unnoticed.
+func TestFindingExportCoversEveryFindingsColumn(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	columns, err := s.DB.Migrator().ColumnTypes(&db.Finding{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(columns) == 0 {
+		t.Fatal("findings table has no columns")
+	}
+	exported := findingExport(db.Finding{})
+	for _, column := range columns {
+		if _, ok := exported[column.Name()]; !ok {
+			t.Errorf("findingExport is missing column %q", column.Name())
+		}
+	}
+}
+
+func TestExportFindings_includesTriageFixAndReleaseColumns(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	repo := db.Repository{URL: "https://example.com/a", Name: "a"}
+	s.DB.Create(&repo)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanDone, SkillName: "security-deep-dive"}
+	s.DB.Create(&scan)
+	releasedAt := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	claimAt := time.Date(2026, 9, 2, 8, 30, 0, 0, time.UTC)
+	checkedAt := time.Date(2026, 9, 3, 16, 45, 0, 0, time.UTC)
+	finding := db.Finding{
+		ScanID:                  scan.ID,
+		RepositoryID:            repo.ID,
+		Title:                   "F1",
+		Severity:                sevHigh,
+		Confidence:              "high",
+		Locations:               "a.go:1\nb.go:2",
+		Snippet:                 "return buf[n]",
+		ImportedFrom:            "CodeQL",
+		CVSSv4Vector:            "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+		CVSSv4Score:             9.3,
+		ReleasedAt:              &releasedAt,
+		ReleaseTag:              "v1.2.3",
+		ReleaseURL:              "https://example.com/a/releases/v1.2.3",
+		FederationClaimContacts: "security@peer.example",
+		FederationClaimAt:       &claimAt,
+		LastRevalidateVerdict:   "true_positive",
+		ProductionViability:     "VIABLE",
+		Novelty:                 db.FindingNoveltyUnfixed,
+		NoveltyCheckedCommit:    "def456",
+		NoveltyCheckedAt:        &checkedAt,
+		SuggestedFix:            "--- a/a.go\n+++ b/a.go\n",
+		SuggestedFixCommit:      "abc123",
+		BreakingChange:          "non_breaking",
+		BreakingChangeRationale: "No public API changes.",
+		ExploitedInWild:         "no",
+		ExploitedInWildEvidence: "Vendor advisory says no known exploitation.",
+		Mitigation:              "Disable the parser.",
+		MitigationSemgrep:       "rules: []",
+		DupCheck:                "Distinct from F2: different sink.",
+	}
+	if err := s.DB.Create(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r := httptest.NewRequest("GET", "/api/v1/findings", nil)
+	asOperator(r)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	rows := readJSONL(t, w.Body.String())
+	if len(rows) != 1 {
+		t.Fatalf("got %d rows, want 1. body=%s", len(rows), w.Body)
+	}
+	row := rows[0]
+
+	want := map[string]any{
+		"confidence":                 finding.Confidence,
+		"locations":                  finding.Locations,
+		"snippet":                    finding.Snippet,
+		"imported_from":              finding.ImportedFrom,
+		"cvss_v4_vector":             finding.CVSSv4Vector,
+		"cvss_v4_score":              finding.CVSSv4Score,
+		"release_tag":                finding.ReleaseTag,
+		"release_url":                finding.ReleaseURL,
+		"federation_claim_contacts":  finding.FederationClaimContacts,
+		"last_revalidate_verdict":    finding.LastRevalidateVerdict,
+		"production_viability":       finding.ProductionViability,
+		"novelty":                    string(finding.Novelty),
+		"novelty_checked_commit":     finding.NoveltyCheckedCommit,
+		"suggested_fix":              finding.SuggestedFix,
+		"suggested_fix_commit":       finding.SuggestedFixCommit,
+		"breaking_change":            finding.BreakingChange,
+		"breaking_change_rationale":  finding.BreakingChangeRationale,
+		"exploited_in_wild":          finding.ExploitedInWild,
+		"exploited_in_wild_evidence": finding.ExploitedInWildEvidence,
+		"mitigation":                 finding.Mitigation,
+		"mitigation_semgrep":         finding.MitigationSemgrep,
+		"dup_check":                  finding.DupCheck,
+	}
+	for key, value := range want {
+		if row[key] != value {
+			t.Errorf("%s = %#v, want %#v", key, row[key], value)
+		}
+	}
+	for key, value := range map[string]time.Time{
+		"released_at":         releasedAt,
+		"federation_claim_at": claimAt,
+		"novelty_checked_at":  checkedAt,
+	} {
+		raw, _ := row[key].(string)
+		got, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil || !got.Equal(value) {
+			t.Errorf("%s = %#v, want %s", key, row[key], value.Format(time.RFC3339))
+		}
+	}
+}
+
 func TestExportRepositories(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
