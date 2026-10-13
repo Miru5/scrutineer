@@ -63,6 +63,20 @@ func EligibleFeedbackForReviews(gdb *gorm.DB, repoID uint, path string, reviewID
 	return rows, err
 }
 
+// EligibleFeedbackByReviewIDs returns the named reviews that are currently
+// eligible feedback in the repository whatever their path, so the caller can
+// match each against its own file.
+func EligibleFeedbackByReviewIDs(gdb *gorm.DB, repoID uint, reviewIDs []uint) ([]FindingFeedback, error) {
+	if len(reviewIDs) == 0 {
+		return nil, nil
+	}
+	var rows []FindingFeedback
+	err := eligibleFeedbackQuery(gdb, repoID).
+		Where("r.id IN ?", reviewIDs).
+		Order("r.id").Scan(&rows).Error
+	return rows, err
+}
+
 // EligibleFeedbackReviewIDs lists every currently eligible decision in the
 // repository regardless of path.
 func EligibleFeedbackReviewIDs(gdb *gorm.DB, repoID uint) (map[uint]bool, error) {
