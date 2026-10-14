@@ -7,6 +7,7 @@ metadata:
   scrutineer.version: 1
   scrutineer.output_file: report.json
   scrutineer.output_kind: verify
+  scrutineer.poc_field: reproducer
 ---
 
 # verify
@@ -172,6 +173,8 @@ Record the result under `criteria.control_bypass`. Copy `scrutineer.controls.ids
 `confirmed` permits only `bypassed` and `not_applicable`. `fixed` permits `bypassed`, `held`, and `not_applicable`, but not an unresolved control. The block is absent entirely when the repository declares no controls; in that normal case still emit `control_bypass` with empty `matched_controls` and `assessments` arrays. When `scrutineer.controls.unavailable_reason` is set, also emit empty arrays, copy that exact value into `control_bypass.unavailable_reason`, and include it in `notes`. Do not emit `unavailable_reason` when the controls block is absent or resolution succeeded.
 
 ## Output
+
+In `reproducer`, preserve every supplied script and input file verbatim in a separate closed Markdown fence with `language filename=relative/path` on its opening line, for example `python filename=probe.py`. Use unique paths relative to the reproduction directory, containing only letters, digits, underscores, hyphens, dots and forward slashes; omit absolute paths, `.` or `..` components and components ending in a dot. Reserve `README.md` for bundle instructions. Put the exact build/run commands in a `sh filename=run.sh` fence, and observed output and quoted source excerpts in separate unnamed `text` or `console` fences. Close each fence on its own line, using longer fences when the content contains backticks. Do not use `--- FILENAME ---` delimiters or invent missing files when verification was not attempted.
 
 Write `./report.json` matching `./schema.json`. Example:
 
