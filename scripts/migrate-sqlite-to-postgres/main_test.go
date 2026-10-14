@@ -213,6 +213,8 @@ func seedHistory(t *testing.T, src *gorm.DB) {
 		&db.FindingReference{FindingID: 1, URL: "https://example.com/reference"},
 		&db.FindingHistory{FindingID: 1, Field: "status", NewValue: "confirmed"},
 		&db.FindingReview{FindingID: 1, Verdict: "true_positive"},
+		&db.FeedbackConfirmation{ReviewID: 1, ScanID: 1, FindingID: 1, Commit: "abc123"},
+		&db.ScanPreflightReceipt{ScanID: 1, ProbeID: "probe", Report: "{}"},
 		&db.FindingVerification{FindingID: 1, ScanID: 1, Status: "verified", Report: "{}"},
 		&db.FindingAttackPath{FindingID: 1, ScanID: 1, ProductionViability: "VIABLE", Report: "{}"},
 		&db.RemediationAttempt{FindingID: 1, PatchScanID: 1, Attempt: 1, Patch: "diff", BaseCommit: "abc123"},
