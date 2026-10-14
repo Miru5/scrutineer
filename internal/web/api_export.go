@@ -727,8 +727,11 @@ func applyFindingFilters(q *gorm.DB, r *http.Request) *gorm.DB {
 	}
 	// sub_path narrows an export to a single monorepo sub-package, so a repo
 	// like rails/rails can be exported (or bundled/encrypted) one gem at a
-	// time. Empty means the whole repository, as before.
+	// time. "." selects root-scoped findings; empty includes all scopes.
 	if v := strings.TrimSpace(params.Get("sub_path")); v != "" {
+		if v == "." {
+			v = ""
+		}
 		q = q.Where("sub_path = ?", v)
 	}
 	// scope=findings curates to the bucket the Findings tab shows; the callers
