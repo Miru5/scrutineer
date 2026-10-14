@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/poc"
 	"scrutineer/internal/testutil"
 )
 
@@ -129,6 +131,11 @@ func TestPostgresMigration(t *testing.T) {
 	if !bytes.Equal(upload.Raw, []byte{0, 0xff, 1}) || upload.Origin != "" {
 		t.Errorf("SBOM bytes or empty origin changed: raw=%v origin=%q", upload.Raw, upload.Origin)
 	}
+	var capture db.FindingPoC
+	must(t, dst.First(&capture, 1).Error)
+	if capture.FindingID != 1 || capture.ScanID != 1 || capture.Commit != "abc123" || !bytes.Equal(capture.Files, migrationPoCFiles(t)) {
+		t.Errorf("PoC capture changed: %+v", capture)
+	}
 	var message db.ChatMessage
 	must(t, dst.First(&message, 1).Error)
 	wantTime := time.Date(2020, 2, 3, 4, 5, 6, 123456000, time.UTC)
@@ -213,6 +220,7 @@ func seedHistory(t *testing.T, src *gorm.DB) {
 		&db.FindingReference{FindingID: 1, URL: "https://example.com/reference"},
 		&db.FindingHistory{FindingID: 1, Field: "status", NewValue: "confirmed"},
 		&db.FindingReview{FindingID: 1, Verdict: "true_positive"},
+		&db.FindingPoC{FindingID: 1, ScanID: 1, Commit: "abc123", Files: migrationPoCFiles(t)},
 		&db.FeedbackConfirmation{ReviewID: 1, ScanID: 1, FindingID: 1, Commit: "abc123"},
 		&db.ScanPreflightReceipt{ScanID: 1, ProbeID: "probe", Report: "{}"},
 		&db.FindingVerification{FindingID: 1, ScanID: 1, Status: "verified", Report: "{}"},
@@ -244,6 +252,14 @@ func seedHistory(t *testing.T, src *gorm.DB) {
 	must(t, src.Exec("UPDATE repositories SET created_at = NULL, fetched_at = NULL WHERE id = 1").Error)
 	must(t, src.Exec("UPDATE skills SET active = false, version = 0 WHERE id = 1").Error)
 	must(t, src.Exec("UPDATE sbom_uploads SET origin = '' WHERE id = 1").Error)
+}
+
+func migrationPoCFiles(t *testing.T) []byte {
+	t.Helper()
+	data := []byte{0, 0xff, 1}
+	files, err := json.Marshal([]poc.File{{Path: "repro.bin", Data: data, SHA256: fmt.Sprintf("%x", sha256.Sum256(data))}})
+	must(t, err)
+	return files
 }
 
 func TestPostgresMigrationRejectsUnsafeSources(t *testing.T) {
