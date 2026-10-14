@@ -118,10 +118,10 @@ jobs:
           go-version-file: go.mod
           cache: false
 
-      - name: Test Ruby profile detection
+      - name: Test project profile detection
         env:
           SCRUTINEER_TEST_RUNNER_IMAGE: scrutineer-runner:ci
-        run: go test ./internal/worker -run '^TestIntegration_DetectRubyProfile$' -count=1 -v
+        run: go test ./internal/worker -run '^TestIntegration_DetectProjectProfile$' -count=1 -v
 
       - name: Log in to GHCR
         if: github.event_name == 'push'
