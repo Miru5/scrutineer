@@ -379,6 +379,21 @@ One row per revalidate or diff-mode deep-dive scan that relied on an analyst dec
 | source | text | `revalidate` or `security-deep-dive`. Rows that predate the column read as `revalidate`. |
 | created_at | datetime | |
 
+## finding_pocs
+
+Stores the first successful PoC capture for each finding. Captures survive scan cleanup and are deleted with the finding; later observations and verification runs do not replace them.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | integer PK | |
+| finding_id | integer FK, unique | References `findings.id`; cascade delete. |
+| scan_id | integer | ID of the scan that captured the files; no foreign key. |
+| commit | text | Source commit recorded by the capturing scan. |
+| files | blob | JSON array of files, each with `path`, base64-encoded `data`, `sha256`, and optional `executable`. |
+| created_at | datetime | Capture time. |
+
+Each capture holds at most 64 regular files, with limits of 1 MiB per file and 2 MiB total. Capture rejects links, special files, unsafe paths, filename conflicts, and files whose path or contents include the capturing scan's API token, a model proxy token, or a host credential from an environment variable ending in `_API_KEY`, `_TOKEN`, `_AUTH_CONTENT` or `_SECRET`. Disclosure bundles and verification workspaces receive the captured bytes with a provenance and checksum manifest.
+
 ## finding_verifications
 
 Append-only grading records produced by finding-scoped `verify` scans. The complete rubric report remains immutable in `report`; `status` and `score` are promoted for display and filtering. The finding page derives its current verification result from the newest row rather than overwriting prior runs. Current reports also contain a non-scored control-bypass gate whose IDs and optional resolution-failure reason are checked against the context resolved by the host for that finding, plus typed severity prerequisites used by deterministic calibration rules.

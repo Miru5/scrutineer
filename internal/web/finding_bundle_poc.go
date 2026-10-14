@@ -96,6 +96,9 @@ func bundlePoC(validation string) ([]bundleEntry, error) {
 			}
 			used[strings.ToLower(name)] = true
 		}
+		if !poc.ValidPath(name) {
+			return nil, fmt.Errorf("invalid PoC filename %q", name)
+		}
 		var mode int64
 		if legacyName == "run.sh" || name == "run.sh" {
 			mode = runShMode
