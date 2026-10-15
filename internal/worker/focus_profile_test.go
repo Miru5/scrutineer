@@ -14,6 +14,8 @@ func TestMatchFocusProfile(t *testing.T) {
 		{"JS inside PHP", `{"languages":[{"name":"JavaScript"}],"package_managers":[{"name":"Composer"}]}`, "node"},
 		{"TypeScript", `{"languages":[{"name":"TypeScript"}]}`, "node"},
 		{"PHP source", `{"languages":[{"name":"PHP"}]}`, "php"},
+		{"PHP extension", `{"languages":[{"name":"PHP"}],"tools":{"native_extension":[{"name":"phpize"}]}}`, "php-ext"},
+		{"JS inside PHP extension", `{"languages":[{"name":"JavaScript"}],"tools":{"native_extension":[{"name":"phpize"}]}}`, "node"},
 		{"Ruby extension", `{"languages":[{"name":"Ruby"}],"tools":{"native_extension":[{"name":"mkmf"}]}}`, "ruby-ext"},
 		{"data before Python", `{"languages":[{"name":"JSON","category":"data"},{"name":"Python","category":"language"}]}`, "python"},
 		{"unknown", `{"languages":[{"name":"Unknown"}]}`, ""},

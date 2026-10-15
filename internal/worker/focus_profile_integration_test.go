@@ -7,11 +7,56 @@ import (
 	"testing"
 )
 
+func testFocusPHPExtension(t *testing.T, image string) {
+	t.Helper()
+	work := t.TempDir()
+	src := filepath.Join(work, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		"config.m4":   "PHP_ARG_ENABLE(example, whether to enable example, [ --enable-example Enable example])\nPHP_NEW_EXTENSION(example, example.c, $ext_shared)\n",
+		"example.c":   "#include <php.h>\nPHP_FUNCTION(example) {}\n",
+		"example.php": "<?php example();\n",
+		"test.php":    "<?php example();\n",
+	} {
+		if err := os.WriteFile(filepath.Join(src, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := ContainerRunner{
+		Image: image, Runtime: ContainerRuntime{Bin: "docker"}, ProfilesDir: filepath.Join("..", "..", "docker", "profiles"),
+		Harness: isolationHarness{stubHarness: stubHarness{guide: "PROFILE.md"}, script: "set -eu; test -f src/config.m4; php-config --configure-options > result.txt"},
+	}
+	result, err := runner.RunSkill(t.Context(), SkillJob{WorkRoot: work, SrcReady: true, Name: "extension-probe", OutputFile: "result.txt", RequiresProfile: "php-ext",
+		FocusArea: `{"name":"extension","paths":["**"],"surface":"extension API"}`}, func(e Event) {
+		if e.Text != "" {
+			t.Log(e.Text)
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Profile != "php-ext" {
+		t.Fatalf("profile = %q, want php-ext", result.Profile)
+	}
+	output, err := os.ReadFile(filepath.Join(work, "result.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, option := range []string{"--enable-debug", "--enable-address-sanitizer", "--enable-undefined-sanitizer"} {
+		if !strings.Contains(string(output), option) {
+			t.Errorf("PHP configure options %q missing %s", output, option)
+		}
+	}
+}
+
 func TestIntegration_FocusProfile(t *testing.T) {
 	image := os.Getenv("SCRUTINEER_TEST_RUNNER_IMAGE")
 	if image == "" {
 		t.Skip("set SCRUTINEER_TEST_RUNNER_IMAGE for container profile checks")
 	}
+	t.Run("PHP extension", func(t *testing.T) { testFocusPHPExtension(t, image) })
 	work := t.TempDir()
 	for path, content := range map[string]string{
 		"composer.json":                      `{"name":"example/backend","require":{"php":"*"}}`,

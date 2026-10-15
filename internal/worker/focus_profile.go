@@ -66,7 +66,7 @@ func matchFocusProfile(out []byte) Profile {
 		if name == "" {
 			break
 		}
-		if matched.Name == name || matched.BaseProfile == name || matched.FallbackProfile == name {
+		if matched.Name == name || matched.Name == name+"-ext" || matched.BaseProfile == name || matched.FallbackProfile == name {
 			return matched
 		}
 		return ProfileByName(name)
