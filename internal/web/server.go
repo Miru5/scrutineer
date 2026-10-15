@@ -2801,8 +2801,8 @@ func (s *Server) loadRepoSubprojectView(repoID uint) repoSubprojectView {
 		SubPath string
 		N       int
 	}, 0)
-	s.DB.Raw(`SELECT sub_path, COUNT(*) AS n FROM scans
-		WHERE repository_id = ? GROUP BY sub_path`,
+	s.DB.Raw(`SELECT COALESCE(sub_path, '') AS sub_path, COUNT(*) AS n FROM scans
+		WHERE repository_id = ? GROUP BY COALESCE(sub_path, '')`,
 		repoID).Scan(&rows)
 	for _, r := range rows {
 		view.ScanCount[r.SubPath] = r.N

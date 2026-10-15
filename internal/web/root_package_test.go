@@ -60,6 +60,61 @@ func TestRootPackageLegacyFindings(t *testing.T) {
 	}
 }
 
+func TestRootPackageLegacyScanCount(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := db.Repository{URL: "https://example.com/root-count", Name: "root-count"}
+	other := db.Repository{URL: "https://example.com/other", Name: "other"}
+	for _, row := range []*db.Repository{&repo, &other} {
+		if err := s.DB.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := db.Subproject{RepositoryID: repo.ID, Path: ".", Name: "root-package"}
+	sibling := db.Subproject{RepositoryID: repo.ID, Path: "packages/client", Name: "client"}
+	for _, row := range []*db.Subproject{&root, &sibling} {
+		if err := s.DB.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range []map[string]any{
+		{"repository_id": repo.ID, "sub_path": nil},
+		{"repository_id": repo.ID, "sub_path": nil},
+		{"repository_id": repo.ID, "sub_path": ""},
+		{"repository_id": repo.ID, "sub_path": sibling.Path},
+		{"repository_id": other.ID, "sub_path": nil},
+		{"repository_id": other.ID, "sub_path": ""},
+	} {
+		row["kind"] = "skill"
+		row["status"] = db.ScanDone
+		if err := s.DB.Model(&db.Scan{}).Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	response := httptest.NewRecorder()
+	s.Handler().ServeHTTP(response, localReq("GET", fmt.Sprintf("/repositories/%d", repo.ID)))
+	if response.Code != http.StatusOK {
+		t.Fatalf("HTTP %d: %s", response.Code, response.Body)
+	}
+	for _, tt := range []struct {
+		project db.Subproject
+		count   int
+	}{{root, 3}, {sibling, 1}} {
+		link := `href="` + subURL(repo.ID, tt.project.ID, "") + `"`
+		var row string
+		for _, candidate := range strings.Split(response.Body.String(), "</tr>") {
+			if strings.Contains(candidate, link) {
+				row = candidate
+				break
+			}
+		}
+		want := fmt.Sprintf(`<td class="text-right text-sm text-muted-foreground">%d</td>`, tt.count)
+		if !strings.Contains(row, want) {
+			t.Errorf("project %q: want scan count %d in row %s", tt.project.Path, tt.count, row)
+		}
+	}
+}
+
 func TestRootPackageScanAll(t *testing.T) {
 	for _, existing := range []string{"none", "root scan", "root focus"} {
 		t.Run(existing, func(t *testing.T) {
