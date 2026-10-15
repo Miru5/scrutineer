@@ -5,11 +5,60 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 
 	"scrutineer/internal/db"
 )
+
+func TestRootPackageLegacyFindings(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := seedFindings(t, s)
+	// Adding the nullable sub_path column left existing root findings as NULL.
+	if err := s.DB.Model(&db.Finding{}).Where("title IN ?", []string{"F1", "G1"}).Update("sub_path", nil).Error; err != nil {
+		t.Fatal(err)
+	}
+	root := db.Subproject{RepositoryID: repo.ID, Path: ".", Name: "root-package"}
+	sibling := db.Subproject{RepositoryID: repo.ID, Path: "packages/client", Name: "client"}
+	scan := db.Scan{RepositoryID: repo.ID, Status: db.ScanDone, SubPath: sibling.Path}
+	for _, row := range []any{&root, &sibling, &scan} {
+		if err := s.DB.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	finding := db.Finding{ScanID: scan.ID, RepositoryID: repo.ID, SubPath: sibling.Path, Title: "F3", Status: db.FindingNew}
+	if err := s.DB.Create(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	export := fmt.Sprintf("/api/v1/repositories/%d/findings", repo.ID)
+	for _, tt := range []struct {
+		name, path string
+		want       []string
+	}{
+		{"root page", subURL(repo.ID, root.ID, ""), []string{"F1", "F2"}},
+		{"root export", export + "?sub_path=.", []string{"F1", "F2"}},
+		{"root bundle", export + "?sub_path=.&format=bundle", []string{"F1", "F2"}},
+		{"filtered root export", export + "?sub_path=.&severity=High", []string{"F1"}},
+		{"sibling page", subURL(repo.ID, sibling.ID, ""), []string{"F3"}},
+		{"sibling export", export + "?sub_path=packages/client", []string{"F3"}},
+		{"all scopes", export, []string{"F1", "F2", "F3"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			s.Handler().ServeHTTP(response, localReq("GET", tt.path))
+			if response.Code != http.StatusOK {
+				t.Fatalf("HTTP %d: %s", response.Code, response.Body)
+			}
+			for _, title := range []string{"F1", "F2", "F3", "G1"} {
+				if got, want := strings.Contains(response.Body.String(), title), slices.Contains(tt.want, title); got != want {
+					t.Errorf("finding %s present=%t, want %t", title, got, want)
+				}
+			}
+		})
+	}
+}
 
 func TestRootPackageScanAll(t *testing.T) {
 	for _, existing := range []string{"none", "root scan", "root focus"} {

@@ -730,9 +730,10 @@ func applyFindingFilters(q *gorm.DB, r *http.Request) *gorm.DB {
 	// time. "." selects root-scoped findings; empty includes all scopes.
 	if v := strings.TrimSpace(params.Get("sub_path")); v != "" {
 		if v == "." {
-			v = ""
+			q = q.Where("sub_path = '' OR sub_path IS NULL")
+		} else {
+			q = q.Where("sub_path = ?", v)
 		}
-		q = q.Where("sub_path = ?", v)
 	}
 	// scope=findings curates to the bucket the Findings tab shows; the callers
 	// validate the value.

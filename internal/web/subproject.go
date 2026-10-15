@@ -34,8 +34,13 @@ func (s *Server) subprojectShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var findings []db.Finding
-	s.DB.Where("repository_id = ? AND sub_path = ?", repo.ID, sub.ScanSubPath()).
-		Order("id desc").Find(&findings)
+	q := s.DB.Where("repository_id = ?", repo.ID)
+	if subPath := sub.ScanSubPath(); subPath == "" {
+		q = q.Where("sub_path = '' OR sub_path IS NULL")
+	} else {
+		q = q.Where("sub_path = ?", subPath)
+	}
+	q.Order("id desc").Find(&findings)
 	var packages []db.Package
 	s.DB.Where("subproject_id = ?", sub.ID).Order("downloads desc").Find(&packages)
 	var advisories []db.Advisory
