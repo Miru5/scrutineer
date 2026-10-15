@@ -69,7 +69,7 @@ func runQueuedCostScan(t *testing.T, w *Worker, scanID uint) db.Scan {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q, err := queue.New(sqlDB, w.Log, 1)
+	q, err := queue.New(sqlDB, w.Log, 1, queue.SQLite)
 	if err != nil {
 		t.Fatal(err)
 	}
