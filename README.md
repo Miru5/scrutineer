@@ -136,9 +136,9 @@ When the containerised runner is active (the default when a container runtime is
 
 - **Containerised runner** -- optional per-scan container isolation with read-only source mounts, dropped capabilities, and an authenticated egress allowlist proxy
 - **Skill HTTP API** -- running skills can call back into scrutineer to list prior scans and enqueue further skills; see the [HTTP API overview](docs/api.md) for authentication boundaries and [openapi.yaml](openapi.yaml) for the full route specification
-- **Live updates** -- SSE streaming of scan logs and status changes, pushed rather than polled; the jobs list, the repositories list and a repository's Scans tab refresh their own table when a scan starts, finishes, or is cancelled, paused, resumed or queued, keeping the current scroll, filters and sort. Elapsed times ("started 3m ago") count up on their own, recomputed in the page rather than fetched
+- **Live updates** -- SSE streaming of scan logs and status changes, pushed rather than polled; the Scans page, the repositories list and a repository's Scans tab refresh their own table when a scan starts, finishes, or is cancelled, paused, resumed or queued, keeping the current scroll, filters and sort. Elapsed times ("started 3m ago") count up on their own, recomputed in the page rather than fetched
 - **Organisation rollup** -- repos, findings, and maintainers grouped by owning org, with per-org markdown exports
-- **Usage tracking** -- per-scan token and cost figures plus a `/usage` page totalling spend per skill, correlating cost with repository workload proxies and linking runs that cost at least ten times their skill median; see [docs/usage.md](docs/usage.md). On a Claude subscription token, a rate-limit wall auto-pauses the batch and resumes it after the reported reset, with per-window status shown on `/usage`. Optionally (`downgrade_on_overage`), once the account crosses into overage the model tier falls back from max/high to the mid tier for new scans until overage clears (typically when the window resets) -- announced in the log, on the jobs page, and on `/usage`. Set `pause_on_overage: true` to pause model scans instead; this takes precedence over downgrading and preserves resumable work.
+- **Usage tracking** -- per-scan token and cost figures plus a `/usage` page totalling spend per skill, correlating cost with repository workload proxies and linking runs that cost at least ten times their skill median; see [docs/usage.md](docs/usage.md). On a Claude subscription token, a rate-limit wall auto-pauses the batch and resumes it after the reported reset, with per-window status shown on `/usage`. Optionally (`downgrade_on_overage`), once the account crosses into overage the model tier falls back from max/high to the mid tier for new scans until overage clears (typically when the window resets) -- announced in the log, on the Scans page, and on `/usage`. Set `pause_on_overage: true` to pause model scans instead; this takes precedence over downgrading and preserves resumable work.
 - **Themes** -- six colour themes plus a light/dark/system toggle, set on the Settings page
 
 ## The default pipeline
@@ -157,8 +157,8 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `maintainers` | Model-backed analysis identifying real maintainers and contact routes |
 | `repo-overview` | Runs `brief --json` for a structured project summary |
 | `embedded-native` | Runs `brief --json` at the repository root and each initialized shallow submodule to map native languages, extension bridges, build tools, manifests, and dependencies |
-| `subprojects` | Enumerates monorepo packages/workspaces so deep-dives can be scoped to a sub-path |
-| `recon` | Maps distinct externally reachable input-processing subsystems into focus areas; after threat-model completes, those areas fan out into parallel deep-dive audits |
+| `subprojects` | Enumerates monorepo packages/workspaces so deep-dives can be scoped to a subpath |
+| `recon` | Finds the parts of the repository that handle outside input and groups them into focus areas; after threat-model completes, those areas fan out into parallel deep-dive audits |
 | `history` | Mines Git history for security fixes that never received an advisory, with ancestry-checked incremental caching and explicit partial-history reporting |
 | `threat-model` | Derives the project's security contract (components, entry-point trust table, claimed and disclaimed properties) for the deep-dive to load |
 | `semgrep` | Static analysis mapped into findings shape |
@@ -188,7 +188,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `variants` | Starting from one confirmed finding, searches the current repository for distinct, high-confidence sibling instances of the same root cause |
 | `audit-injection` | Opt-in static audit for command/code execution, unsafe deserialization, and server-side template injection with ecosystem-specific references |
 | `audit-exfil` | Opt-in static audit for SSRF, path traversal, XXE, and response or diagnostic leakage with ecosystem-specific references |
-| `audit-authz` | Opt-in static audit for IDOR, tenant isolation, fail-open guards, privilege escalation, and authorization decisions based on unverified claims |
+| `audit-authz` | Opt-in static audit for insecure direct object references (IDOR), tenant isolation, fail-open guards, privilege escalation, and authorization decisions based on unverified claims |
 | `audit-pii` | Opt-in static audit for real personal or customer-identifying data committed to source or exposed through logs, URLs, telemetry, exports, and responses |
 | `audit-memory` | Opt-in static audit for reachable memory corruption in first-party C, C++, unsafe Rust, native extensions, and FFI boundaries |
 | `audit-package-manager` | Static audit of package manager clients, registries, and proxies against a bundled threat model; triage enqueues it when source evidence shows the repository implements one |
@@ -235,7 +235,7 @@ Each finding from the `security-deep-dive` skill starts at **new** and moves thr
 
 1. **new** -- just identified. High/Critical from `security-deep-dive` and every imported finding auto-enqueue a `revalidate` pass first, which records `true_positive` / `false_positive` / `already_fixed` / `uncertain` on the finding. Every true positive chains into the release-build `critic`; High/Critical true positives also chain into `verify`. Outside that path: click "Run verification" to start independent confirmation using model tokens, "Mark triaged" if you have already verified it independently, or "Reject"
 2. **enriched** -- verification confirmed it, or revalidation classed it as a true positive. Review and click "Mark triaged" to save your decision
-3. **triaged** -- confirmed real. Review the critic's release-build assessment, then click "Draft disclosure" (a model job) to generate the draft. An exact `NON_VIABLE` assessment blocks private disclosure, public issues, and upstream reporting; `VIABLE`, `SAMPLE_OR_TEST`, `CONDITIONAL_VIABLE`, and unassessed findings remain analyst decisions
+3. **triaged** -- confirmed real. Review the critic's release-build assessment, then click "Draft disclosure" (a model scan) to generate the draft. An exact `NON_VIABLE` assessment blocks private disclosure, public issues, and upstream reporting; `VIABLE`, `SAMPLE_OR_TEST`, `CONDITIONAL_VIABLE`, and unassessed findings remain analyst decisions
 4. **ready** -- draft prepared. Run the `report-upstream` skill to file it via GitHub PVR (github.com only, requires `gh` auth), run `public-issue` for reviewed low-severity hardening findings that are safe to file publicly, or click "Mark as reported" after sending it yourself. When upstream has no PVR, follow the runbook in [docs/disclosure-fallback.md](docs/disclosure-fallback.md): route to a CNA when `cna-match` names one, otherwise contact the channel `maintainers` returned. With `federation_peers` configured, every route out of this state (the button, the `report-upstream` and `public-issue` skills, and the VINCE submission) first asks each peer whether it already holds the same finding and, on a match, names their contact so you coordinate before proceeding (see [docs/interchange.md](docs/interchange.md))
 5. **reported** -- sent to maintainer. Click "Acknowledged" when they respond
 6. **acknowledged** -- maintainer working on fix. Click "Mark fixed" when it ships
@@ -508,8 +508,8 @@ See [SECURITY.md](SECURITY.md) for the reporting policy and [threatmodel.md](thr
 - [docs/development.md](docs/development.md) -- project layout, regenerating embedded data, running tests
 - [docs/encrypted-sharing.md](docs/encrypted-sharing.md) -- encrypted findings sharing between contributors (age + SSH keys, team keyring management)
 - [docs/sarif-export.md](docs/sarif-export.md) -- exporting a repository's findings as SARIF 2.1.0 and handing them to OSS-CRS as bug candidates
-- [docs/interchange.md](docs/interchange.md) -- federation interchange format: in-toto record envelope, salted finding hashes, the claim-check endpoint, the public and members-only feeds with their export/import jobs (threat surface: T14 in [threatmodel.md](threatmodel.md))
-- [docs/codex.md](docs/codex.md) -- the codex backend: what differs from claude, sandbox interaction, adding another harness
+- [docs/interchange.md](docs/interchange.md) -- federation interchange format: in-toto record envelope, salted finding hashes, the claim-check endpoint, the public and members-only feeds with their export/import syncs (threat surface: T14 in [threatmodel.md](threatmodel.md))
+- [docs/codex.md](docs/codex.md) -- the codex backend: what differs from claude, sandbox interaction, adding another backend
 - [docs/opencode.md](docs/opencode.md) -- OpenCode provider credentials, images, auth state, readiness, and egress
 - [docs/copilot.md](docs/copilot.md) -- the copilot backend: GitHub token credential handling and egress
 - [docs/podman.md](docs/podman.md) -- security model and known gaps for the podman / rootless runtime (sandbox isolation, hardened-mode verification)
