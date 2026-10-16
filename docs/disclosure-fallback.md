@@ -2,7 +2,7 @@
 
 `report-upstream` is the happy path: scrutineer files the finding as a private GitHub Security Advisory on the upstream repo, pushes the proposed patch into the temporary private fork GitHub allocates, and waits for the maintainer to acknowledge. The skill refuses to run if `gh api repos/{owner}/{repo}/private-vulnerability-reporting` does not report `{"enabled": true}`, because there is no equivalent private channel inside the GitHub UI.
 
-This page is the runbook for the rest: how to disclose when PVR is off, when the upstream is not on github.com at all, or when the project sits inside a CNA's scope and the CNA prefers to handle intake. None of it needs new skills; the existing posture, maintainers, and cna-match runs already produce the data, and the choice tree below names which skill answers which question.
+This page is the runbook for the rest: how to disclose when private vulnerability reporting (PVR) is off, when the upstream is not on github.com at all, or when the project sits inside the scope of a CVE Numbering Authority (CNA) and the CNA prefers to handle intake. None of it needs new skills; the existing posture, maintainers, and cna-match runs already produce the data, and the choice tree below names which skill answers which question.
 
 ## Decide the route in this order
 
@@ -27,7 +27,7 @@ If the CNA wants the report submitted through a GitHub PVR on a different repo (
 
 ### Submit to CERT/CC VINCE
 
-Scrutineer can submit a reviewed finding to CERT/CC through VINCE's authenticated vulnerability-report endpoint. Add the API key and reporter defaults to `scrutineer.yaml`:
+Scrutineer can submit a reviewed finding to the CERT Coordination Center (CERT/CC) through the authenticated vulnerability-report endpoint of VINCE, its Vulnerability Information and Coordination Environment. Add the API key and reporter defaults to `scrutineer.yaml`:
 
 ```yaml
 vince:

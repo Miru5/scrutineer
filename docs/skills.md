@@ -16,10 +16,10 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `repo-overview` | Runs `brief --json` for a structured project summary used by other skills as orientation. |
 | `embedded-native` | Runs Brief at the repository root and each initialized shallow Git submodule to map native languages, extension bridges, build tools, manifests, and dependencies. Runs when triage finds native-extension, submodule, or mixed native-language signals. |
 | `packages` | Looks up every published package the repository produces across all registries, with download and dependent counts, plus supply-chain risk flags. |
-| `advisories` | Fetches published GHSA and CVE records that affect any of those packages. |
+| `advisories` | Fetches published GitHub Security Advisory (GHSA) and Common Vulnerabilities and Exposures (CVE) records that affect any of those packages. |
 | `dependencies` | Indexes every manifest and lockfile in the tree with `git-pkgs list`. |
 | `sbom` | Generates a CycloneDX SBOM with `git-pkgs sbom`. |
-| `subprojects` | Enumerates monorepo packages and workspaces so deep-dive scans can be scoped to a sub-path. |
+| `subprojects` | Enumerates monorepo packages and workspaces so deep-dive scans can be scoped to a subpath. |
 | `maintainers` | Identifies who actually maintains the repo and the best contact route for a security report, distinguishing leads from drive-by contributors and bots. |
 | `posture` | Scores readiness to receive a vulnerability report: SECURITY.md, private vulnerability reporting, prior advisories, scanning workflows. |
 | `compliance` | Audits the repository against the OpenSSF Baseline controls with `darnit`, resolves the controls darnit defers to LLM analysis or could not verify without a forge token, and records the per-control verdicts plus the attained Baseline level on the repository. Run on demand. |
@@ -35,11 +35,11 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `audit-embedded` | Audits firmware updates, rollback protection, boot chain, provisioning, device credentials, debug interfaces and device communication against a bundled ISVS-informed threat model. Triage selects it from source evidence. |
 | `cna-match` | Matches the repository to its CVE Numbering Authority so disclosures route to the right contact. |
 | `semgrep` | Runs semgrep with the `p/security-audit` and `p/secrets` rulesets and maps hits into the findings shape. |
-| `bandit` | Runs bandit over the repository's Python and maps its hits into the findings shape, grouped per test id and carrying bandit's confidence level, CWE, and rule documentation link. Gated on Python being one of the detected languages. |
+| `bandit` | Runs bandit over the repository's Python and maps its hits into the findings shape, grouped per test id and carrying bandit's confidence level, Common Weakness Enumeration (CWE) id, and rule documentation link. Gated on Python being one of the detected languages. |
 | `vuln-scan` | High-recall model-backed static source-code candidate scan adapted from Anthropic's defending-code reference harness. |
 | `zizmor` | Audits GitHub Actions workflows and enriches tool hits with bundled guidance for expression injection, privileged PR contexts, indirect workflows, credentials, runners, and supply-chain trust. |
 | `ingest` | Normalizes an externally-produced security report in an arbitrary format into findings. Runs when `/v1/import` cannot recognise the payload; the raw report is staged at `import/report`. |
-| `recon` | Maps the repository's distinct externally reachable input-processing subsystems into focus areas that threat-model carries into later deep-dive audits. |
+| `recon` | Finds the parts of the repository that handle outside input and groups them into focus areas that threat-model carries into later deep-dive audits. |
 | `history` | Mines Git history for security fixes that may never have received an advisory. Reuses a prior report only when its analyzed HEAD is still an ancestor, classifies size-capped diff batches, and marks shallow or truncated analysis as partial. Its cumulative fixes feed threat-model and advisory-deep-dive. |
 | `threat-model` | Derives the project's security contract from source and docs: components, entry-point trust table, claimed and disclaimed properties, and disposition labels. Loaded by `security-deep-dive` so it does not re-derive boundaries per run. |
 | `security-deep-dive` | The model-driven audit. Inventories trust boundaries and sinks, then runs a six-step trace/boundary/validate/prior-art/reach/rate analysis on each. After threat-model completes, Scrutineer fans configured focus areas out into parallel deep-dive scans. One third of eligible triage runs also receive one [exploratory audit](exploratory-audits.md). |

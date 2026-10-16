@@ -4,7 +4,7 @@ Scrutineer can drive OpenAI's [codex](https://github.com/openai/codex) CLI
 instead of claude-code, selected with `-backend codex` (or `backend: codex` in
 `scrutineer.yaml`). The container, egress proxy, language profiles and
 workspace layout stay the same; only the agent CLI exec'd inside the per-scan
-container changes. This document records what the codex harness maps onto,
+container changes. This document records what the codex backend maps onto,
 where it differs from claude, and what's still rough.
 
 ## Setup
@@ -102,7 +102,7 @@ The codex backend requires the containerised runner. `--no-container` with
 `-backend codex` is rejected at startup: the codex binary lives in the runner
 image, not on the host, and the local fallback (`LocalClaude`) is claude-only.
 
-## How the harness maps
+## How the backend maps
 
 Everything the container runner asks of the agent CLI goes through the
 `Harness` interface (`internal/worker/harness.go`). The codex values:
@@ -192,7 +192,7 @@ item-level `error` events surface as errors, `turn.completed` becomes the
 result event with token usage, and unknown shapes fall through as raw text
 rather than being dropped. Reports of rough edges welcome on #211.
 
-## Adding another harness
+## Adding another backend
 
 Opencode (and any other agent CLI) slots in the same way: a struct
 implementing `Harness` in its own `internal/worker/harness_<name>.go`, an
