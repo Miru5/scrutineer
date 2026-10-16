@@ -179,6 +179,47 @@ type isolationEnv struct {
 	image     string
 	apiPort   string
 	gatewayIP string
+	api       *apiRecorder
+}
+
+// apiRecorder stands in for the host skill API and records the path and Host
+// of every request that reaches it.
+type apiRecorder struct {
+	mu   sync.Mutex
+	seen []apiRequest
+}
+
+type apiRequest struct{ path, host string }
+
+func (a *apiRecorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	a.mu.Lock()
+	a.seen = append(a.seen, apiRequest{path: r.URL.Path, host: r.Host})
+	a.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// hostsFor returns the Host of every recorded request whose path holds marker.
+func (a *apiRecorder) hostsFor(marker string) []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var hosts []string
+	for _, req := range a.seen {
+		if strings.Contains(req.path, marker) {
+			hosts = append(hosts, req.host)
+		}
+	}
+	return hosts
+}
+
+func (a *apiRecorder) waitFor(marker string, d time.Duration) []string {
+	deadline := time.Now().Add(d)
+	for time.Now().Before(deadline) {
+		if hosts := a.hostsFor(marker); len(hosts) > 0 {
+			return hosts
+		}
+		time.Sleep(pollInterval)
+	}
+	return a.hostsFor(marker)
 }
 
 func isolationSetup(t *testing.T) isolationEnv {
@@ -197,7 +238,8 @@ func isolationSetup(t *testing.T) isolationEnv {
 	if !imageExistsLocally(t.Context(), rt, image) {
 		t.Skipf("probe image %q is unavailable locally", image)
 	}
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	recorder := &apiRecorder{}
+	api := httptest.NewServer(recorder)
 	t.Cleanup(api.Close)
 	_, apiPort, err := net.SplitHostPort(api.Listener.Addr().String())
 	if err != nil {
@@ -207,7 +249,7 @@ func isolationSetup(t *testing.T) isolationEnv {
 	if gatewayIP == "" {
 		t.Fatal("host-gateway did not resolve on Docker Desktop")
 	}
-	return isolationEnv{rt: rt, image: image, apiPort: apiPort, gatewayIP: gatewayIP}
+	return isolationEnv{rt: rt, image: image, apiPort: apiPort, gatewayIP: gatewayIP, api: recorder}
 }
 
 func (e isolationEnv) runner(script string) ContainerRunner {
