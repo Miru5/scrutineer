@@ -29,6 +29,16 @@ The audit evidence is the candidate's own argument, so a consumer that needs an 
 
 ## Handing findings to OSS-CRS
 
-OSS-CRS reads bug candidates through `libCRS`, whose [SARIF parser](https://github.com/ossf/oss-crs/blob/main/libCRS/libCRS/sarif.py) keeps each result's `ruleId`, `level`, `message.text` and the `uri` and `startLine`/`endLine` of each entry in `locations`. Its directory reader picks up only `*.sarif` and `*.sarif.json` files, so keep the extension. Pass the file with `--bug-candidate` (or a directory of them with `--bug-candidate-dir`) to `oss-crs run` or `oss-crs build-target`, which stages it into `FETCH_DIR/bug-candidates/`, where a CRS picks it up with `libCRS fetch bug-candidate <dir>`. See [fetching data](https://github.com/ossf/oss-crs/blob/main/docs/crs-development-guide.md#fetching-data) in the CRS development guide.
+OSS-CRS reads bug candidates through `libCRS`, whose [SARIF parser](https://github.com/ossf/oss-crs/blob/main/libCRS/libCRS/sarif.py) keeps each result's `ruleId`, `level`, `message.text` and the `uri` and `startLine`/`endLine` of each entry in `locations`. Its directory reader picks up only `*.sarif` and `*.sarif.json` files, so keep the extension.
 
-That parser ignores `suppressions`, `relatedLocations` and the property bag, so a rejected finding reaches a campaign as an ordinary candidate and only its primary location is used. Filter with `status=` when the export should carry a single lifecycle state. The OSS-CRS guide still lists the bug-candidate format as unstandardised, so this mapping was checked against that parser rather than against a published contract.
+Location URIs are relative to the repository root, so the source tree handed to OSS-CRS must be a checkout of the repository at the run's `versionControlProvenance[0].revisionId`. A source-only campaign with an `auditing` CRS then takes the export as a bug candidate:
+
+```sh
+git -C ./widget checkout "$(jq -r '.runs[0].versionControlProvenance[0].revisionId' scrutineer.sarif)"
+uv run oss-crs prepare --compose-file ./crs-compose.yaml
+uv run oss-crs run --compose-file ./crs-compose.yaml --target-source-path ./widget --bug-candidate ./scrutineer.sarif
+```
+
+`--bug-candidate` (or `--bug-candidate-dir` for a directory of exports) stages the file into `FETCH_DIR/bug-candidates/`, where a CRS reads it with `libCRS fetch bug-candidate <dir>` and parses it with `libCRS.sarif.parse_sarif_dir`. `oss-crs build-target` takes the same flags for directed builds. See [fetching data](https://github.com/ossf/oss-crs/blob/main/docs/crs-development-guide.md#fetching-data) in the CRS development guide. This was run end to end against OSS-CRS `674fd2a` with a source-only `auditing` CRS that fetched the export, parsed it with `libCRS` and resolved every location against `OSS_CRS_TARGET_SOURCE`.
+
+OSS-CRS ignores `versionControlProvenance`, so an export spanning several revisions mixes locations from commits other than the one checked out, and a run whose revision differs from the checkout may point at lines that have moved. The parser also ignores `suppressions`, `relatedLocations` and the property bag, so a rejected finding reaches a campaign as an ordinary candidate and only its primary location is used. Filter with `status=` when the export should carry a single lifecycle state. The OSS-CRS guide still lists the bug-candidate format as unstandardised, so this mapping was checked against that parser rather than against a published contract.
