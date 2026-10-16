@@ -247,6 +247,7 @@ func (s *Server) scanShow(w http.ResponseWriter, r *http.Request) {
 	skill := loadScanReportSkill(s.DB, &scan)
 	s.render(w, r, "scan_show.html", map[string]any{
 		"Scan":               scan,
+		"Investigation":      scanInvestigationReport(scan),
 		"Diff":               parseScanDiffView(scan),
 		"DisclosureReviewID": s.disclosureReviewFindingID(scan),
 		"CanExportReport":    hasExportableScanReport(s.DB, &scan, skill),

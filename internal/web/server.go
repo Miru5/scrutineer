@@ -521,6 +521,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /repositories", s.repoList)
 	mux.HandleFunc("GET /repositories/new", s.repoNew)
+	mux.HandleFunc("GET /investigations/new", s.investigationNew)
+	mux.HandleFunc("POST /investigations", s.investigationCreate)
 	mux.HandleFunc("GET /repositories/branches", s.repoBranches)
 	mux.HandleFunc("POST /repositories", s.repoCreate)
 	mux.HandleFunc("POST /repositories/bulk", s.repoBulkCreate)
@@ -1530,7 +1532,7 @@ var (
 	// rather than able to break out (see TestDeepDiveSkillNameSafeForSplicing).
 	// Parenthesised so it can be embedded in larger expressions without
 	// precedence surprises.
-	findingsBucketSkillSQL = "(skill_name IN (" + db.SQLStringLiteral(deepDiveSkillName) + ", " + db.SQLStringLiteral(vulnScanSkillName) + ", " + db.SQLStringLiteral(advisoryDeepDiveSkillName) + ") OR skill_name = '' OR skill_name IS NULL OR kind = 'import')"
+	findingsBucketSkillSQL = "(skill_name IN (" + db.SQLStringLiteral(deepDiveSkillName) + ", " + db.SQLStringLiteral(vulnScanSkillName) + ", " + db.SQLStringLiteral(advisoryDeepDiveSkillName) + ", " + db.SQLStringLiteral(investigateSkillName) + ") OR skill_name = '' OR skill_name IS NULL OR kind = 'import')"
 	// nonScannerScanFilter selects findings whose parent scan populates the
 	// Findings bucket (findingsBucketSkillSQL) — every finding the UI shows by
 	// default. scannerScanFilter is its structural inverse: the cheap tool
@@ -1576,7 +1578,7 @@ func findingsScanIDs(gdb *gorm.DB) *gorm.DB {
 // llmAuditSkillNames are the curated model-driven audits: the skills whose
 // findings are a repository's working set rather than scanner output.
 func llmAuditSkillNames() []string {
-	return []string{deepDiveSkillName, vulnScanSkillName, advisoryDeepDiveSkillName}
+	return []string{deepDiveSkillName, vulnScanSkillName, advisoryDeepDiveSkillName, investigateSkillName}
 }
 
 func isLLMAuditSkill(skillName string) bool {
