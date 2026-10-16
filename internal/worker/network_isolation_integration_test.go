@@ -13,14 +13,14 @@ package worker
 // then run it with SCRUTINEER_TEST_NETWORK_ISOLATION_IMAGE=scrutineer-netprobe-test
 // go test -race -run NetworkIsolation -v ./internal/worker/
 //
-// Only Docker Desktop is exercised. Docker Engine (host-proxy path) and podman
-// are not covered here; podman isolation is covered by podman_integration_test.go.
-// Cloud metadata has no positive control on Docker Desktop because there is no
-// metadata service, so only the egress proxy refusing non-public addresses is
-// checked. Gateway-addressed probes are likewise omitted: on Docker Desktop a
-// packet sent to a network's gateway never reaches a host service even without
-// isolation, so such a probe could not fail. They belong with runtimes where a
-// gateway control can succeed.
+// Docker Engine refuses --hardened, and engine_isolation_integration_test.go
+// pins the gateway reachability behind that refusal. Podman isolation is
+// covered by podman_integration_test.go. Cloud metadata has no positive control
+// on Docker Desktop because there is no metadata service, so only the egress
+// proxy refusing non-public addresses is checked. Gateway-addressed probes are
+// likewise omitted here: on Docker Desktop a packet sent to a network's gateway
+// never reaches a host service even without isolation, so such a probe could
+// not fail. They belong with runtimes where a gateway control can succeed.
 
 import (
 	"bytes"
@@ -153,8 +153,8 @@ func (l *controlledListener) saw(marker string) bool {
 	return bytes.Contains(l.data, []byte(marker))
 }
 
-func (l *controlledListener) waitSaw(marker string, d time.Duration) bool {
-	deadline := time.Now().Add(d)
+func (l *controlledListener) waitSaw(marker string) bool {
+	deadline := time.Now().Add(controlWait)
 	for time.Now().Before(deadline) {
 		if l.saw(marker) {
 			return true
@@ -180,6 +180,9 @@ type isolationEnv struct {
 	apiPort   string
 	gatewayIP string
 	api       *apiRecorder
+	// proxyURL is the in-process host proxy scans use on runtimes without an
+	// egress sidecar. Empty means the sidecar path.
+	proxyURL string
 }
 
 // apiRecorder stands in for the host skill API and records the path and Host
@@ -230,10 +233,10 @@ func isolationSetup(t *testing.T) isolationEnv {
 	}
 	rt, ok := container.DetectRuntime("docker")
 	if !ok {
-		t.Skip("docker is unavailable; Docker Engine (host-proxy path) and podman are not exercised here; podman isolation is covered by podman_integration_test.go")
+		t.Skip("docker is unavailable; podman isolation is covered by podman_integration_test.go")
 	}
 	if !rt.DockerDesktop {
-		t.Skip("docker daemon is not Docker Desktop; Docker Engine (host-proxy path) and podman are not exercised here; podman isolation is covered by podman_integration_test.go")
+		t.Skip("docker daemon is not Docker Desktop; Docker Engine refuses --hardened and podman isolation is covered by podman_integration_test.go")
 	}
 	if !imageExistsLocally(t.Context(), rt, image) {
 		t.Skipf("probe image %q is unavailable locally", image)
@@ -253,18 +256,23 @@ func isolationSetup(t *testing.T) isolationEnv {
 }
 
 func (e isolationEnv) runner(script string) ContainerRunner {
-	return ContainerRunner{
+	r := ContainerRunner{
 		Image:    e.image,
 		Harness:  isolationHarness{script: script},
 		Hardened: true,
 		Runtime:  e.rt,
-		Egress: EgressSidecarConfig{
-			Token:     NewProxyToken(),
-			Allow:     []string{HostGatewayAlias},
-			APIPort:   e.apiPort,
-			GatewayIP: e.gatewayIP,
-		},
 	}
+	if e.proxyURL != "" {
+		r.ProxyURL = e.proxyURL
+		return r
+	}
+	r.Egress = EgressSidecarConfig{
+		Token:     NewProxyToken(),
+		Allow:     []string{HostGatewayAlias},
+		APIPort:   e.apiPort,
+		GatewayIP: e.gatewayIP,
+	}
+	return r
 }
 
 func isolationKey(label string) string {
@@ -272,7 +280,11 @@ func isolationKey(label string) string {
 }
 
 func (e isolationEnv) runScan(ctx context.Context, key, work, script string) error {
-	_, err := e.runner(script).RunSkill(ctx, SkillJob{
+	return runIsolatedScan(ctx, e.runner(script), key, work)
+}
+
+func runIsolatedScan(ctx context.Context, r ContainerRunner, key, work string) error {
+	_, err := r.RunSkill(ctx, SkillJob{
 		IsolationKey: key,
 		WorkRoot:     work,
 		SrcReady:     true,
@@ -287,6 +299,10 @@ func (e isolationEnv) defaultNetworkRun(t *testing.T, script string, extra ...st
 	ctx, cancel := context.WithTimeout(t.Context(), controlRunTimeout)
 	defer cancel()
 	args := append([]string{"run", "--rm"}, extra...)
+	if !e.rt.DockerDesktop {
+		// Only Docker Desktop resolves the host alias without --add-host.
+		args = append(args, "--add-host", HostGatewayAlias+":host-gateway")
+	}
 	args = append(args, "--entrypoint", "sh", e.image, "-c", script)
 	out, err := exec.CommandContext(ctx, "docker", args...).CombinedOutput()
 	if err != nil {
@@ -343,7 +359,7 @@ func runControls(t *testing.T, e isolationEnv, l *controlledListener) controls {
 		m := newMarker(t, c.marker)
 		// dig exits non-zero without a reply, so only arrival at the listener counts.
 		_ = e.defaultNetworkRun(t, fmt.Sprintf(c.script, m))
-		ok[c.name] = l.waitSaw(m, controlWait)
+		ok[c.name] = l.waitSaw(m)
 	}
 	ok["resolver"] = e.defaultNetworkRun(t, "nslookup -timeout=3 -retry=1 example.com") == nil
 	return ok
@@ -382,14 +398,7 @@ func TestIntegration_NetworkIsolationDirectEgress(t *testing.T) {
 	assertDirectBlocked(t, ctl, l, files, markers)
 	assertProxyRefusals(t, l, files, markers)
 	t.Run("ipv6", func(t *testing.T) { assertIPv6(t, env, files) })
-	t.Run("cleanup", func(t *testing.T) {
-		if err := exec.Command("docker", "inspect", "--", proxySidecarName(key)).Run(); err == nil {
-			t.Errorf("sidecar %q remains after RunSkill", proxySidecarName(key))
-		}
-		if err := exec.Command("docker", "network", "inspect", "--", hardenedNetworkName(key)).Run(); err == nil {
-			t.Errorf("network %q remains after RunSkill", hardenedNetworkName(key))
-		}
-	})
+	t.Run("cleanup", func(t *testing.T) { assertScanRemoved(t, key) })
 }
 
 func assertDirectBlocked(t *testing.T, ctl controls, l *controlledListener, files, markers map[string]string) {
