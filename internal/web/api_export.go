@@ -227,8 +227,8 @@ func (s *Server) repositoryExportQuery() *gorm.DB {
 
 func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
 	format := r.URL.Query().Get("format")
-	if format != "" && format != "jsonl" && format != "bundle" {
-		writeAPIError(w, http.StatusBadRequest, "unsupported format: jsonl or bundle")
+	if format != "" && format != "jsonl" && format != "bundle" && format != "sarif" {
+		writeAPIError(w, http.StatusBadRequest, "unsupported format: jsonl, bundle or sarif")
 		return
 	}
 	// encrypt only applies to the bundle format. Rejecting it here is a
@@ -239,7 +239,7 @@ func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusBadRequest, "encrypt requires format=bundle")
 		return
 	}
-	// scope=findings curates either format to the Findings bucket (deep-dive,
+	// scope=findings curates every format to the Findings bucket (deep-dive,
 	// vuln-scan, imports), dropping per-repo scanner noise. Unknown values are
 	// rejected rather than silently returning the full set a caller asked to
 	// narrow.
@@ -270,6 +270,10 @@ func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
 
 	if format == "bundle" {
 		s.apiExportRepoBundle(w, r, &repo)
+		return
+	}
+	if format == "sarif" {
+		s.apiExportRepoSARIF(w, r, &repo)
 		return
 	}
 	q := s.DB.Model(&db.Finding{}).

@@ -62,6 +62,7 @@ Detailed workflows:
 
 - [Importing findings](import.md) covers `POST /api/v1/import`, accepted formats, repository resolution, and revalidation.
 - [Encrypted findings sharing](encrypted-sharing.md) covers repository bundles, archival exports, age encryption, and round trips through the import route.
+- [Exporting findings as SARIF](sarif-export.md) covers `format=sarif` on the repository findings export and handing the log to OSS-CRS as bug candidates.
 - The [OpenAPI document](../openapi.yaml) defines the JSONL exports, filters, delete operations, and audit endpoints.
 
 ## Federation claim check: `/claim-check`

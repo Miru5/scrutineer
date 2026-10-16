@@ -1084,7 +1084,7 @@ paths:
 
   /v1/repositories/{id}/findings:
     get:
-      summary: Export findings for a repository (JSONL, or a shareable bundle)
+      summary: Export findings for a repository (JSONL, a shareable bundle, or SARIF)
       description: |
         With `format=jsonl` (the default) returns one JSON object per line
         (`application/x-ndjson`), each a `FindingExport` carrying the full set
@@ -1108,10 +1108,17 @@ paths:
         snippet embeds verbatim source, which a cross-party share must not leak.
 
         Adding `encrypt=1` (bundle only) wraps the bundle in armored age,
-        encrypted to every configured recipient. Adding `scope=findings` (either
+        encrypted to every configured recipient. Adding `scope=findings` (any
         format) curates the export to the Findings bucket (deep-dive and
         vuln-scan audits plus operator imports), dropping per-repo scanner
-        noise. Operator token; localhost-only.
+        noise.
+
+        With `format=sarif` returns one SARIF 2.1.0 log with a run per
+        observed revision. Disclosure drafts, recipients, notes and
+        communications are never included, and each result records its latest
+        `verify` outcome (or `unverified`) apart from the audit's own evidence.
+        See docs/sarif-export.md for the field mapping. Operator token;
+        localhost-only.
       operationId: exportRepositoryFindings
       security: [{ operatorToken: [] }]
       parameters:
@@ -1120,8 +1127,9 @@ paths:
           in: query
           description: |
             `jsonl` (default) streams NDJSON; `bundle` returns one JSON sharing
-            document. Other values get a 400.
-          schema: { type: string, enum: [jsonl, bundle] }
+            document; `sarif` returns one SARIF 2.1.0 log. Other values get a
+            400.
+          schema: { type: string, enum: [jsonl, bundle, sarif] }
         - name: encrypt
           in: query
           description: |
@@ -1132,7 +1140,7 @@ paths:
         - name: scope
           in: query
           description: |
-            `findings` curates a `jsonl` or `bundle` export to the Findings
+            `findings` curates a `jsonl`, `bundle` or `sarif` export to the Findings
             bucket (deep-dive and vuln-scan audits plus operator imports),
             excluding per-repo scanner noise. It combines with `severity` and
             `status`. Any other value, or use on the cross-repo
@@ -1162,13 +1170,18 @@ paths:
         '200':
           description: |
             JSONL stream (`format=jsonl`), a JSON sharing bundle
-            (`format=bundle`), or armored age ciphertext
-            (`format=bundle&encrypt=1`).
+            (`format=bundle`), a SARIF 2.1.0 log (`format=sarif`), or armored
+            age ciphertext (`format=bundle&encrypt=1`).
           content:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/FindingExport' }
             application/json:
-              schema: { $ref: '#/components/schemas/ImportMinimal' }
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ImportMinimal'
+                  - type: object
+                    description: SARIF 2.1.0 log (`format=sarif`), valid against the OASIS sarif-schema-2.1.0.json.
+                    required: [version, runs]
             text/plain:
               schema:
                 type: string
