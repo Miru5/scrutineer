@@ -16,10 +16,10 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `repo-overview` | Runs `brief --json` for a structured project summary used by other skills as orientation. |
 | `embedded-native` | Runs Brief at the repository root and each initialized shallow Git submodule to map native languages, extension bridges, build tools, manifests, and dependencies. Runs when triage finds native-extension, submodule, or mixed native-language signals. |
 | `packages` | Looks up every published package the repository produces across all registries, with download and dependent counts, plus supply-chain risk flags. |
-| `advisories` | Fetches published GHSA and CVE records that affect any of those packages. |
+| `advisories` | Fetches published GitHub Security Advisory (GHSA) and Common Vulnerabilities and Exposures (CVE) records that affect any of those packages. |
 | `dependencies` | Indexes every manifest and lockfile in the tree with `git-pkgs list`. |
 | `sbom` | Generates a CycloneDX SBOM with `git-pkgs sbom`. |
-| `subprojects` | Enumerates monorepo packages and workspaces so deep-dive scans can be scoped to a sub-path. |
+| `subprojects` | Enumerates monorepo packages and workspaces so deep-dive scans can be scoped to a subpath. |
 | `maintainers` | Identifies who actually maintains the repo and the best contact route for a security report, distinguishing leads from drive-by contributors and bots. |
 | `posture` | Scores readiness to receive a vulnerability report: SECURITY.md, private vulnerability reporting, prior advisories, scanning workflows. |
 | `compliance` | Audits the repository against the OpenSSF Baseline controls with `darnit`, resolves the controls darnit defers to LLM analysis or could not verify without a forge token, and records the per-control verdicts plus the attained Baseline level on the repository. Run on demand. |
@@ -27,19 +27,20 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `variants` | Starting from one confirmed finding, searches the current repository for distinct, high-confidence sibling instances of the same root cause. Run on demand; it does not scan dependents. |
 | `audit-injection` | Focused static audit for attacker-controlled data reaching command execution, dynamic evaluation, unsafe deserialization, or server-side template execution. Uses ecosystem-specific reference notes and runs on demand. |
 | `audit-exfil` | Focused static audit for attacker-controlled reads, requests, parsers, or error paths that can disclose files, metadata, secrets, or internal responses. Uses ecosystem-specific reference notes and runs on demand. |
-| `audit-authz` | Focused static audit for IDOR, tenant-isolation failures, missing or fail-open guards, privilege escalation, and unverified claims used for authorization. Uses ecosystem and GraphQL reference notes and runs on demand. |
+| `audit-authz` | Focused static audit for insecure direct object references (IDOR), tenant-isolation failures, missing or fail-open guards, privilege escalation, and unverified claims used for authorization. Uses ecosystem and GraphQL reference notes and runs on demand. |
 | `audit-pii` | Focused static audit for real personal or customer-identifying data committed to source or exposed through logs, URLs, telemetry, exports, and responses. Distinguishes concrete exposure from synthetic examples, reserved addresses, and public author metadata; runs on demand. |
 | `audit-memory` | Focused static audit for reachable memory corruption in first-party C, C++, unsafe Rust, native extensions, and FFI boundaries. Requires complete primitive-hit accounting and keeps library, CLI, parser, and foreign-runtime boundaries separate; runs on demand. |
 | `audit-package-manager` | Audits package manager clients, registries, and proxies against a bundled threat model. Triage selects it from source evidence; findings remain separate from design properties and unresolved assumptions. |
-| `audit-web` | Audits web sessions, browser origins, uploads and workflow state against a bundled ASVS-informed threat model. Triage selects it from source evidence. |
-| `audit-embedded` | Audits firmware updates, rollback protection, boot chain, provisioning, device credentials, debug interfaces and device communication against a bundled ISVS-informed threat model. Triage selects it from source evidence. |
+| `audit-web` | Audits web sessions, browser origins, uploads and workflow state against a bundled threat model informed by the OWASP Application Security Verification Standard (ASVS). Triage selects it from source evidence. |
+| `audit-embedded` | Audits firmware updates, rollback protection, boot chain, provisioning, device credentials, debug interfaces and device communication against a bundled threat model informed by the OWASP IoT Security Verification Standard (ISVS). Triage selects it from source evidence. |
+| `audit-build-tooling` | Audits build systems, task runners and developer tools for workspace trust and auto-execution, configuration precedence, build cache integrity, plugin resolution and secret exposure against a bundled SLSA-informed threat model. Triage selects it from source evidence. |
 | `cna-match` | Matches the repository to its CVE Numbering Authority so disclosures route to the right contact. |
 | `semgrep` | Runs semgrep with the `p/security-audit` and `p/secrets` rulesets and maps hits into the findings shape. |
-| `bandit` | Runs bandit over the repository's Python and maps its hits into the findings shape, grouped per test id and carrying bandit's confidence level, CWE, and rule documentation link. Gated on Python being one of the detected languages. |
+| `bandit` | Runs bandit over the repository's Python and maps its hits into the findings shape, grouped per test id and carrying bandit's confidence level, Common Weakness Enumeration (CWE) id, and rule documentation link. Gated on Python being one of the detected languages. |
 | `vuln-scan` | High-recall model-backed static source-code candidate scan adapted from Anthropic's defending-code reference harness. |
 | `zizmor` | Audits GitHub Actions workflows and enriches tool hits with bundled guidance for expression injection, privileged PR contexts, indirect workflows, credentials, runners, and supply-chain trust. |
 | `ingest` | Normalizes an externally-produced security report in an arbitrary format into findings. Runs when `/v1/import` cannot recognise the payload; the raw report is staged at `import/report`. |
-| `recon` | Maps the repository's distinct externally reachable input-processing subsystems into focus areas that threat-model carries into later deep-dive audits. |
+| `recon` | Finds the parts of the repository that handle outside input and groups them into focus areas that threat-model carries into later deep-dive audits. |
 | `history` | Mines Git history for security fixes that may never have received an advisory. Reuses a prior report only when its analyzed HEAD is still an ancestor, classifies size-capped diff batches, and marks shallow or truncated analysis as partial. Its cumulative fixes feed threat-model and advisory-deep-dive. |
 | `threat-model` | Derives the project's security contract from source and docs: components, entry-point trust table, claimed and disclaimed properties, and disposition labels. Loaded by `security-deep-dive` so it does not re-derive boundaries per run. |
 | `security-deep-dive` | The model-driven audit. Inventories trust boundaries and sinks, then runs a six-step trace/boundary/validate/prior-art/reach/rate analysis on each. After threat-model completes, Scrutineer fans configured focus areas out into parallel deep-dive scans. One third of eligible triage runs also receive one [exploratory audit](exploratory-audits.md). |
@@ -105,6 +106,19 @@ source-proven vulnerabilities from intended behavior and evidenced negative
 results. Guarantees that depend on hardware, fuses, secure elements,
 manufacturing or deployment are recorded as unresolved assumptions. Its ISVS
 reference does not imply certification.
+The `build-tooling` mode selects `audit-build-tooling` for first-party build
+systems, task runners, compiler or bundler drivers, code generators and
+developer tools that read and act on workspace-controlled input. It also
+selects `audit-injection` when the tool splices that input into a command line
+or interpreter input it builds itself; running a declared command as written
+does not. A project that only uses a build tool, ships its own Makefile, CI
+configuration or build scripts, or depends on a build library does not activate
+it. A package manager that runs lifecycle scripts can activate both this mode
+and `package-manager` while the shared audits are still enqueued once. The
+audit distinguishes source-proven vulnerabilities from intended behavior and
+evidenced negative results. Guarantees that depend on CI runner, cache server
+or deployment evidence are recorded as unresolved assumptions. Its SLSA
+reference does not imply conformance.
 
 Add another mode by defining its detection criteria in the triage reference
 and bundling its audit skill and threat model.
@@ -156,6 +170,7 @@ metadata:
 | `metadata.scrutineer.recurse_submodules` | bool | When `true`, remote scans initialize and update Git submodules recursively at depth 1 before path filtering and skill execution. Submodule failures are best-effort unless the scan context is cancelled. Local-directory scans use the submodule contents already present and never modify the source directory. |
 | `metadata.scrutineer.requires_profile` | string | Pins the skill to a single registered runner profile (e.g. `php`). The enqueue API returns `400` when the requested profile mismatches; if the operator does not force a profile, the worker fails the scan when auto-detection resolves to a different one. Must name a profile registered in `internal/worker/profile.go` — `default` and the empty string are not valid here (use the absence of the key for "no constraint"). |
 | `metadata.scrutineer.requires` | list of string | Skill names that must each have a completed scan on the repository before this skill dispatches. While a prereq is in flight the worker re-queues the scan with exponential backoff (30s doubling to a 5m cap, 20 attempts) and fails it when the budget runs out; if every run of a prereq has already failed or been cancelled the dependent fails immediately. A prereq that is unregistered, disabled, or was never enqueued for the repository counts as satisfied, so triage's gating decisions don't deadlock dependents. |
+| `metadata.scrutineer.poc_field` | `validation` `reproducer` | Report field holding reproduction Markdown: each finding's `validation`, or the top-level `reproducer`. When set, that Markdown must put every PoC file in a closed fence named `language filename=relative/path`; a report that does not goes through the report-repair step. Omit for skills whose evidence is not a reproduction. |
 | `metadata.scrutineer.paths` | list of string | Shell-glob allow-list (`*`, `?`, `**`) of paths the skill sees inside the workspace `src/`. When set, only matching files are exposed and the builtin skip list is bypassed. |
 | `metadata.scrutineer.ignore_paths` | list of string | Shell-glob deny-list applied on top of `paths` (or, by default, the builtin skip list). |
 
@@ -249,10 +264,13 @@ When a scan starts, the worker creates `./data/work/scan-{id}/` with:
     ./schema.json                copy of the skill's schema for the model to read
     ./scripts/                   copy of the skill's scripts/, so `bash scripts/foo.sh` resolves from cwd
     ./report.json                the skill writes its output here
+    ./poc/<finding-id>/           reproduction files written and run by the skill
 
 `./src/` is copied from a per-URL persistent clone under `./data/work/repo-cache/<sha256(url)>/src/` so the second scan of the same repository only fetches the delta. The cache is shallow by default and is deepened on demand when the code browser needs to resolve a historical commit for `/repositories/{id}/blob/{commit}/{path}`. Local (`file://`) repositories skip the cache: `./src/` is a copy of the working tree, and the code browser reads committed content from the local checkout's own history, so edits that were not committed at scan time are not shown there.
 
-The worker then runs `claude -p "Use the {name} skill in this workspace"` with the working directory set to the workspace root. Anything the skill writes outside `./report.json` is discarded when the workspace is cleaned. Write intermediate files under `./` rather than `/tmp`; concurrent scans share `/tmp` in the container runner.
+The worker then runs `claude -p "Use the {name} skill in this workspace"` with the working directory set to the workspace root. It retains the first successful capture of `./poc/<finding-id>/` with each finding, using the report-local ID such as `F001`. Finish and run the reproduction before publishing the finding, then leave its files unchanged. Captures allow 64 regular files, 1 MiB per file and 2 MiB total; links and unsafe paths are refused. A failed capture produces a warning without discarding the finding or report. Other workspace files are discarded during cleanup. Write intermediate files under `./` rather than `/tmp`; concurrent scans share `/tmp` in the container runner.
+
+Finding-scoped verification receives the captured files in `./poc/` beside its fresh `./src/` checkout. `./poc-manifest.json` records the source scan, commit and file checksums. Captures remain until the finding is deleted; verification and disclosure bundles use validation text when no capture exists.
 
 ## context.json
 

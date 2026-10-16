@@ -1,8 +1,11 @@
 // Package db holds GORM setup and the persistent models.
 //
-// SQLite is the default backend. GORM speaks PostgreSQL with a one-line
-// driver swap (gorm.io/driver/postgres) and the schema below uses nothing
-// SQLite-specific, so the migration path is "change the Open call".
+// SQLite is the default backend; PostgreSQL is selected via the database
+// block in the config file (see OpenBackend). The GORM models are shared
+// across both dialects, and the handful of dialect-specific SQL sites
+// branch on gdb.Dialector.Name() ("sqlite" vs "postgres"). SQLite-only
+// operations (VACUUM INTO backups, PRAGMA-based introspection) are guarded
+// so they never run against PostgreSQL.
 package db
 
 import (
@@ -11,13 +14,33 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+// Dialect names a supported database backend. It matches both the config
+// file's driver value and the string gorm's Dialector.Name() reports, so
+// callers can compare gdb.Dialector.Name() against these constants.
+type Dialect string
+
+const (
+	DialectSQLite   Dialect = "sqlite"
+	DialectPostgres Dialect = "postgres"
+)
+
+// Options selects and locates the backend OpenBackend connects to. For
+// SQLite, DSN is the database file path (an in-memory DSN in tests); for
+// PostgreSQL it is a pgx/libpq connection string or URL.
+type Options struct {
+	Dialect Dialect
+	DSN     string
+}
 
 type Repository struct {
 	ID   uint   `gorm:"primarykey"`
@@ -399,7 +422,9 @@ type Scan struct {
 	StartedAt  *time.Time
 	FinishedAt *time.Time
 	CostUSD    float64
-	Turns      int
+	// SessionCostUSD is the highest reported cumulative cost of the harness session.
+	SessionCostUSD float64 `gorm:"not null;default:0"`
+	Turns          int
 	// Token usage from the claude-code result event. CacheWriteTokens is
 	// cache_creation_input_tokens; CacheReadTokens is
 	// cache_read_input_tokens. AutoMigrate adds these as zero-default
@@ -1022,8 +1047,10 @@ type Finding struct {
 	Notes                  []FindingNote           `gorm:"constraint:OnDelete:CASCADE"`
 	Communications         []FindingCommunication  `gorm:"constraint:OnDelete:CASCADE"`
 	References             []FindingReference      `gorm:"constraint:OnDelete:CASCADE"`
+	DisclosureSubmissions  []DisclosureSubmission  `gorm:"constraint:OnDelete:CASCADE" json:"-"`
 	History                []FindingHistory        `gorm:"constraint:OnDelete:CASCADE"`
 	Verifications          []FindingVerification   `gorm:"constraint:OnDelete:CASCADE"`
+	PoC                    *FindingPoC             `gorm:"constraint:OnDelete:CASCADE"`
 	AttackPaths            []FindingAttackPath     `gorm:"constraint:OnDelete:CASCADE"`
 	RemediationAttempts    []RemediationAttempt    `gorm:"constraint:OnDelete:CASCADE"`
 	RemediationValidations []RemediationValidation `gorm:"constraint:OnDelete:CASCADE"`
@@ -1469,6 +1496,8 @@ type Skill struct {
 	RequiresCommands string `gorm:"type:text"`
 	RequiresFeatures string `gorm:"type:text"`
 	DegradedMode     bool
+	// PoCField is set via `scrutineer.poc_field`.
+	PoCField string `gorm:"column:poc_field"`
 
 	Source     string // "bundled" | "local" | "remote" | "ui"
 	SourcePath string // directory on disk (bundled/local/remote) or empty (ui)
@@ -1608,22 +1637,59 @@ func withPragmas(dsn string) string {
 // Connect opens dsn with the standard pragmas and logger but performs no
 // migration. Open is Connect plus the full migration path.
 func Connect(dsn string) (*gorm.DB, error) {
+	return connectBackend(Options{Dialect: DialectSQLite, DSN: dsn})
+}
+
+func connectBackend(opts Options) (*gorm.DB, error) {
 	cfg := &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	}
-	gdb, err := gorm.Open(sqlite.Open(withPragmas(dsn)), cfg)
+	var (
+		dialector gorm.Dialector
+		openErr   string
+	)
+	switch opts.Dialect {
+	case DialectPostgres:
+		dialector, openErr = postgres.Open(opts.DSN), "open postgres"
+	case DialectSQLite, "":
+		dialector, openErr = sqlite.Open(withPragmas(opts.DSN)), "open sqlite"
+	default:
+		return nil, fmt.Errorf("unknown database dialect %q", opts.Dialect)
+	}
+	gdb, err := gorm.Open(dialector, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, fmt.Errorf("%s: %w", openErr, err)
+	}
+	if opts.Dialect == DialectPostgres {
+		if err := registerTextSanitizer(gdb); err != nil {
+			return nil, fmt.Errorf("register text sanitizer: %w", err)
+		}
 	}
 	return gdb, nil
 }
 
 func Open(dsn string) (*gorm.DB, error) {
-	gdb, err := Connect(dsn)
+	return OpenBackend(Options{Dialect: DialectSQLite, DSN: dsn})
+}
+
+// OpenBackend connects to the selected backend and applies its schema migrations.
+func OpenBackend(opts Options) (*gorm.DB, error) {
+	gdb, err := connectBackend(opts)
 	if err != nil {
 		return nil, err
 	}
-	if err := migrateSchema(gdb); err != nil {
+	if opts.Dialect == DialectPostgres {
+		err = gdb.Transaction(func(tx *gorm.DB) error {
+			// Hold the lock through every schema check and DDL statement.
+			if err := tx.Exec("SELECT pg_advisory_xact_lock(?)", postgresMigrationLock).Error; err != nil {
+				return err
+			}
+			return migrate(tx)
+		})
+	} else {
+		err = migrate(gdb)
+	}
+	if err != nil {
 		if sqldb, dbErr := gdb.DB(); dbErr == nil {
 			_ = sqldb.Close()
 		}
@@ -1632,8 +1698,24 @@ func Open(dsn string) (*gorm.DB, error) {
 	return gdb, nil
 }
 
-// migrateSchema brings gdb up to databaseSchemaVersion.
-func migrateSchema(gdb *gorm.DB) error {
+const postgresMigrationLock int64 = 0x736372757469
+const postgresSchemaVersionKey = "database_schema_version"
+
+// Models lists every GORM model the schema migrates.
+func Models() []any {
+	return []any{
+		&Repository{}, &Scan{},
+		&Finding{}, &FindingLabel{}, &FindingNote{}, &DisclosureSubmission{},
+		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FeedbackConfirmation{}, &FindingVerification{}, &FindingAttackPath{}, &ScanPreflightReceipt{},
+		&RemediationAttempt{}, &RemediationValidation{}, &AuditEvent{}, &FindingPoC{},
+		&Dependency{}, &ExpectedFinding{}, &Package{}, &PackageAlternative{}, &Dependent{}, &FindingDependent{}, &Advisory{}, &AdvisoryAudit{},
+		&Maintainer{}, &Skill{}, &Subproject{}, &ComplianceControl{},
+		&SBOMUpload{}, &SBOMPackage{}, &CNA{}, &Setting{},
+		&Conversation{}, &ChatMessage{}, &InterchangeRecord{},
+	}
+}
+
+func migrate(gdb *gorm.DB) error {
 	foundSchemaVersion, err := checkDatabaseSchemaVersion(gdb)
 	if err != nil {
 		return err
@@ -1641,19 +1723,21 @@ func migrateSchema(gdb *gorm.DB) error {
 	if err := preMigrate(gdb); err != nil {
 		return fmt.Errorf("premigrate: %w", err)
 	}
-	if err := gdb.AutoMigrate(
-		&Repository{}, &Scan{},
-		&Finding{}, &FindingLabel{}, &FindingNote{},
-		&FindingCommunication{}, &FindingReference{}, &FindingHistory{}, &FindingReview{}, &FeedbackConfirmation{}, &FindingVerification{}, &FindingAttackPath{}, &ScanPreflightReceipt{},
-		&RemediationAttempt{}, &RemediationValidation{}, &AuditEvent{},
-		&Dependency{}, &ExpectedFinding{}, &Package{}, &PackageAlternative{}, &Dependent{}, &FindingDependent{}, &Advisory{}, &AdvisoryAudit{},
-		&Maintainer{}, &Skill{}, &Subproject{}, &ComplianceControl{},
-		&SBOMUpload{}, &SBOMPackage{}, &CNA{}, &Setting{},
-		&Conversation{}, &ChatMessage{}, &InterchangeRecord{},
-	); err != nil {
+	if gdb.Name() == string(DialectPostgres) && !gdb.Migrator().HasTable(&Scan{}) {
+		// Create both sides of the scans/findings cycle before adding foreign keys.
+		gdb.DisableForeignKeyConstraintWhenMigrating = true
+		err := gdb.AutoMigrate(Models()...)
+		gdb.DisableForeignKeyConstraintWhenMigrating = false
+		if err != nil {
+			return fmt.Errorf("automigrate tables: %w", err)
+		}
+	}
+	if err := gdb.AutoMigrate(Models()...); err != nil {
 		return fmt.Errorf("automigrate: %w", err)
 	}
-	gdb.Exec(`CREATE INDEX IF NOT EXISTS idx_scans_priority_id ON scans (status_priority, id DESC)`)
+	if err := gdb.Exec(`CREATE INDEX IF NOT EXISTS idx_scans_priority_id ON scans (status_priority, id DESC)`).Error; err != nil {
+		return err
+	}
 	// Subproject identity is (repository_id, path): the upsert in
 	// parseSubprojectsOutput keys on it so ids stay stable across skill
 	// re-runs (Package/Advisory.SubprojectID reference them). Collapse any
@@ -1664,10 +1748,17 @@ func migrateSchema(gdb *gorm.DB) error {
 	// and re-running the full-table dedup scan on every boot would be wasted
 	// work.
 	if !gdb.Migrator().HasIndex(&Subproject{}, "idx_subprojects_repo_path") {
-		gdb.Exec(`DELETE FROM subprojects WHERE id NOT IN (SELECT MIN(id) FROM subprojects GROUP BY repository_id, path)`)
-		gdb.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_subprojects_repo_path ON subprojects (repository_id, path)`)
+		if err := gdb.Exec(`DELETE FROM subprojects WHERE id NOT IN (SELECT MIN(id) FROM subprojects GROUP BY repository_id, path)`).Error; err != nil {
+			return err
+		}
+		if err := gdb.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_subprojects_repo_path ON subprojects (repository_id, path)`).Error; err != nil {
+			return err
+		}
 	}
 	if foundSchemaVersion < databaseSchemaVersion {
+		if gdb.Name() == string(DialectPostgres) {
+			return SetSetting(gdb, postgresSchemaVersionKey, strconv.Itoa(databaseSchemaVersion))
+		}
 		if err := gdb.Exec(fmt.Sprintf("PRAGMA user_version = %d", databaseSchemaVersion)).Error; err != nil {
 			return fmt.Errorf("record database schema version: %w", err)
 		}
@@ -1677,7 +1768,20 @@ func migrateSchema(gdb *gorm.DB) error {
 
 func checkDatabaseSchemaVersion(gdb *gorm.DB) (int, error) {
 	var found int
-	if err := gdb.Raw("PRAGMA user_version").Scan(&found).Error; err != nil {
+	var err error
+	if gdb.Name() == string(DialectPostgres) {
+		if !gdb.Migrator().HasTable(&Setting{}) {
+			return 0, nil
+		}
+		var setting Setting
+		err = gdb.Where("key = ?", postgresSchemaVersionKey).Limit(1).Find(&setting).Error
+		if err == nil && setting.Value != "" {
+			found, err = strconv.Atoi(setting.Value)
+		}
+	} else {
+		err = gdb.Raw("PRAGMA user_version").Scan(&found).Error
+	}
+	if err != nil {
 		return 0, fmt.Errorf("read database schema version: %w", err)
 	}
 	if found > databaseSchemaVersion {

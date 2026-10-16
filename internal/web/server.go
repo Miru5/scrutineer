@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"scrutineer/internal/akrites"
 	"scrutineer/internal/db"
 	"scrutineer/internal/queue"
 	"scrutineer/internal/repoconfig"
@@ -146,9 +147,11 @@ type Server struct {
 	// VINCE holds the config-file-only API credential and reporter defaults
 	// for native CERT/CC submissions. vinceHTTPClient is injectable so tests
 	// can use httptest without changing the credential-bearing config shape.
-	VINCE           vince.Config
-	vinceHTTPClient *http.Client
-	vinceSubmitMu   sync.Mutex
+	VINCE             vince.Config
+	vinceHTTPClient   *http.Client
+	vinceSubmitMu     sync.Mutex
+	Akrites           akrites.Config
+	akritesHTTPClient *http.Client
 	// FederationPublicFeed and FederationMembersFeed are the git remotes
 	// the export job pushes each tier to; FederationImportFeeds are the
 	// peer remotes the import job pulls; all three empty leaves the
@@ -566,6 +569,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /findings/{id}/disclosure.html", s.findingDisclosureHTML)
 	mux.HandleFunc("GET /findings/{id}/vince", s.findingVINCEPreview)
 	mux.HandleFunc("POST /findings/{id}/vince", s.findingVINCESubmit)
+	mux.HandleFunc("GET /findings/{id}/akrites", s.findingAkritesPreview)
+	mux.HandleFunc("POST /findings/{id}/akrites", s.findingAkritesSubmit)
 	mux.HandleFunc("POST /findings/{id}/status", s.findingStatus)
 	mux.HandleFunc("POST /findings/{id}/exploited-in-wild", s.findingExploitedInWild)
 	mux.HandleFunc("POST /findings/{id}/verify", s.findingVerify)
@@ -913,12 +918,12 @@ func (s *Server) repoList(w http.ResponseWriter, r *http.Request) {
 	if lang != "" {
 		// languages is a ", "-joined list; wrapping both sides lets one
 		// LIKE match start/middle/end/only without four OR clauses.
-		q = q.Where("(', ' || languages || ', ') LIKE ?", "%, "+lang+", %")
+		q = q.Where("LOWER(', ' || languages || ', ') LIKE LOWER(?)", "%, "+lang+", %")
 	}
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
 	if search != "" {
 		like := "%" + search + "%"
-		q = q.Where("name LIKE ? OR url LIKE ? OR full_name LIKE ? OR description LIKE ?",
+		q = q.Where("LOWER(name) LIKE LOWER(?) OR LOWER(url) LIKE LOWER(?) OR LOWER(full_name) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?)",
 			like, like, like, like)
 	}
 
@@ -1184,9 +1189,7 @@ func loadRepoFindings(gdb *gorm.DB, repoID uint, category string) repoFindings {
 			scanIDs = append(scanIDs, f.ScanID)
 		}
 	}
-	// Typed Find so GORM's dialector quotes the reserved-word column
-	// (`commit` on SQLite, "commit" on Postgres) and coerces NULL text to
-	// the Go zero value, replacing the previous Raw + COALESCE.
+	// GORM quotes the reserved commit column for the selected backend.
 	var rows []db.Scan
 	gdb.Select("id", "skill_name", "commit").Where("id IN ?", scanIDs).Find(&rows)
 	for _, row := range rows {
@@ -1313,7 +1316,7 @@ func (s *Server) findingsIndexQuery(r *http.Request, includeScanners, includeMis
 	}
 	if search := strings.TrimSpace(r.URL.Query().Get("q")); search != "" {
 		like := "%" + search + "%"
-		q = q.Where("title LIKE ? OR location LIKE ? OR cwe LIKE ? OR cve_id LIKE ? OR ghsa_id LIKE ? OR affected LIKE ?",
+		q = q.Where("LOWER(title) LIKE LOWER(?) OR LOWER(location) LIKE LOWER(?) OR LOWER(cwe) LIKE LOWER(?) OR LOWER(cve_id) LIKE LOWER(?) OR LOWER(ghsa_id) LIKE LOWER(?) OR LOWER(affected) LIKE LOWER(?)",
 			like, like, like, like, like, like)
 	}
 	return q
@@ -1392,7 +1395,7 @@ func findingIndexWhereSQL(r *http.Request, includeScanners, includeMissed bool) 
 	}
 	if search := strings.TrimSpace(r.URL.Query().Get("q")); search != "" {
 		like := "%" + search + "%"
-		where = append(where, "(title LIKE ? OR location LIKE ? OR cwe LIKE ? OR cve_id LIKE ? OR ghsa_id LIKE ? OR affected LIKE ?)")
+		where = append(where, "(LOWER(title) LIKE LOWER(?) OR LOWER(location) LIKE LOWER(?) OR LOWER(cwe) LIKE LOWER(?) OR LOWER(cve_id) LIKE LOWER(?) OR LOWER(ghsa_id) LIKE LOWER(?) OR LOWER(affected) LIKE LOWER(?))")
 		args = append(args, like, like, like, like, like, like)
 	}
 	return where, args
@@ -1892,7 +1895,7 @@ func (s *Server) packages(w http.ResponseWriter, r *http.Request) {
 	if search != "" {
 		like := "%" + search + "%"
 		// GORM maps the PURL struct field to the `p_url` column.
-		q = q.Where("name LIKE ? OR p_url LIKE ? OR licenses LIKE ?", like, like, like)
+		q = q.Where("LOWER(name) LIKE LOWER(?) OR LOWER(p_url) LIKE LOWER(?) OR LOWER(licenses) LIKE LOWER(?)", like, like, like)
 	}
 
 	sortCol, dir := splitSort(r.URL.Query().Get("sort"))
@@ -1958,7 +1961,7 @@ func (s *Server) advisoriesList(w http.ResponseWriter, r *http.Request) {
 	search := strings.TrimSpace(r.URL.Query().Get("q"))
 	if search != "" {
 		like := "%" + search + "%"
-		q = q.Where("title LIKE ? OR packages LIKE ? OR classification LIKE ? OR uuid LIKE ?",
+		q = q.Where("LOWER(title) LIKE LOWER(?) OR LOWER(packages) LIKE LOWER(?) OR LOWER(classification) LIKE LOWER(?) OR LOWER(uuid) LIKE LOWER(?)",
 			like, like, like, like)
 	}
 
@@ -2143,7 +2146,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	vinceReason := "VINCE API key is not configured"
 	vinceReady := false
 	if s.VINCE.Enabled() {
-		if err := vinceEligibility(f, notes, refs); err != nil {
+		if err := vinceEligibility(f, notes); err != nil {
 			vinceReason = err.Error()
 		} else {
 			vinceReady = true
@@ -2152,6 +2155,13 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	}
 	data["VINCEReady"] = vinceReady
 	data["VINCEReason"] = vinceReason
+	akritesLink := s.Akrites.Enabled()
+	if !akritesLink {
+		var submissions int64
+		s.DB.Model(&db.DisclosureSubmission{}).Where("finding_id = ? AND channel = ?", f.ID, db.DisclosureChannelAkrites).Count(&submissions)
+		akritesLink = submissions > 0
+	}
+	data["AkritesLink"] = akritesLink
 	if id, c, ok := LookupCWE(f.CWE); ok {
 		data["CWE"] = map[string]any{"ID": id, "Name": c.Name, "Description": c.Description}
 	}
@@ -3258,8 +3268,8 @@ func deleteReviewConfirmations(tx *gorm.DB, where string, args ...any) error {
 func findingChildModels() []any {
 	return []any{
 		&db.FindingNote{}, &db.FindingCommunication{}, &db.FindingReference{},
-		&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{}, &db.FeedbackConfirmation{},
-		&db.FindingVerification{}, &db.FindingAttackPath{},
+		&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{}, &db.FeedbackConfirmation{}, &db.DisclosureSubmission{},
+		&db.FindingVerification{}, &db.FindingAttackPath{}, &db.FindingPoC{},
 		&db.RemediationValidation{}, &db.RemediationAttempt{},
 	}
 }

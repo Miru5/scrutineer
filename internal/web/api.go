@@ -169,6 +169,7 @@ func (s *Server) apiHandler() http.Handler {
 	mux.HandleFunc("POST /findings/{id}/communications", s.apiAddFindingCommunication)
 	mux.HandleFunc("GET /findings/{id}/references", s.apiListFindingReferences)
 	mux.HandleFunc("POST /findings/{id}/references", s.apiAddFindingReference)
+	mux.HandleFunc("POST /findings/{id}/submissions", s.apiRecordFindingSubmission)
 	mux.HandleFunc("PUT /findings/{id}/labels", s.apiSetFindingLabels)
 	mux.HandleFunc("GET /findings/{id}/history", s.apiListFindingHistory)
 	mux.HandleFunc("GET /skills", s.apiListSkills)
@@ -359,7 +360,7 @@ func (s *Server) apiValidateReport(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusRequestEntityTooLarge, "could not read body (max 1 MB)")
 		return
 	}
-	if detail := worker.ValidateSkillReport(skill.Name, skill.SchemaJSON, string(body)); detail != "" {
+	if detail := worker.ValidateSkillReport(skill.Name, skill.SchemaJSON, skill.PoCField, string(body)); detail != "" {
 		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "errors": detail})
 		return
 	}
@@ -560,7 +561,7 @@ func (s *Server) apiListCNAs(w http.ResponseWriter, r *http.Request) {
 	q := s.DB.Order("short_name")
 	if term := r.URL.Query().Get("q"); term != "" {
 		like := "%" + term + "%"
-		q = q.Where("short_name LIKE ? OR organization LIKE ? OR scope LIKE ?", like, like, like)
+		q = q.Where("LOWER(short_name) LIKE LOWER(?) OR LOWER(organization) LIKE LOWER(?) OR LOWER(scope) LIKE LOWER(?)", like, like, like)
 	}
 	var rows []db.CNA
 	q.Find(&rows)

@@ -7,19 +7,19 @@
 # update the selected asset and checksum atomically. A mismatched tag/digest in
 # a Renovate PR fails sha256sum below and usually means asset identification
 # failed upstream.
-ARG CLAUDE_AMD64_LOCK=v2.1.292@sha256:7045cd790b2c7b8cc6169d061aec7274d37a6a0d8ed318a6ff8868262433b1f9
-ARG CLAUDE_ARM64_LOCK=v2.1.292@sha256:3b2b5f594bef12054b00e6cb61cddcc0900150e0a22a0ff822a0515bc17b1230
+ARG CLAUDE_AMD64_LOCK=v2.1.295@sha256:cf9cfb714ded1f27c1d3b7fb274faef50d72312c4b14525a74659188f59bd8b1
+ARG CLAUDE_ARM64_LOCK=v2.1.295@sha256:a22d704eca7f241476445dfeb001c1848c1ebb6251e583be3dccfbfb1a5fd4aa
 
-ARG CODEX_AMD64_LOCK=rust-v0.160.1@sha256:340801565906a7028f6baaa9ab6853addaef221f0016a1417a7c1ffdd96c21f0
-ARG CODEX_ARM64_LOCK=rust-v0.160.1@sha256:dff0954438fa455c2197ddb1f421d8d68625d98de610f76bedb6e5bc837ea35b
+ARG CODEX_AMD64_LOCK=rust-v0.162.0@sha256:4f573944c1d2059109d75a2f4d0cc9c03697288224a5e407717a9de98fc010c5
+ARG CODEX_ARM64_LOCK=rust-v0.162.0@sha256:d47a5fa21e037a1b85729b88c238ff3da8a956fc9fb5ad3976714428e7fb2bda
 
 ARG OPENCODE_AMD64_LOCK=v1.18.35@sha256:c8f888b451f5494a18f858fffb0e0b68f4e4baa9c241761c5f206884f0fa640d
 ARG OPENCODE_ARM64_LOCK=v1.18.35@sha256:f7f2ba59ee8aa94d388f9696575a32d20e71c2ee48def9f80fc693a60fec6c72
 
-ARG COPILOT_AMD64_LOCK=v1.0.92@sha256:1d8daedb9cdb200061471cabe9f924f80293689cb9c42489344864c044f33ea9
-ARG COPILOT_ARM64_LOCK=v1.0.92@sha256:634d5200d96c17f01357637a166bb303744e8ca965550d6bbcb72b52b5e3c6a4
+ARG COPILOT_AMD64_LOCK=v1.0.94@sha256:0acaff842900357f4734c768b8933b1c5c8ce65e1bf74f15573f5cedd650b240
+ARG COPILOT_ARM64_LOCK=v1.0.94@sha256:8d763b46fa5f30151ad03b94aefee513e9312ecfa2d485b02e356ff1a3955e61
 
-ARG SEMGREP_VERSION=1.179.0
+ARG SEMGREP_VERSION=1.180.0
 
 ARG BANDIT_VERSION=1.9.4
 ARG DARNIT_VERSION=0.1.1
@@ -31,7 +31,7 @@ COPY scripts/retry-build-command.sh /usr/local/bin/retry-build-command.sh
 ARG BETTERLEAKS_VERSION=v1.9.0
 RUN GOBIN=/out CGO_ENABLED=0 sh /usr/local/bin/retry-build-command.sh go install -ldflags "-X=github.com/betterleaks/betterleaks/version.Version=${BETTERLEAKS_VERSION}" github.com/betterleaks/betterleaks@${BETTERLEAKS_VERSION}
 RUN GOBIN=/out sh /usr/local/bin/retry-build-command.sh go install github.com/git-pkgs/git-pkgs@v0.21.0
-RUN GOBIN=/out sh /usr/local/bin/retry-build-command.sh go install github.com/git-pkgs/brief/cmd/brief@v0.14.0
+RUN GOBIN=/out sh /usr/local/bin/retry-build-command.sh go install github.com/git-pkgs/brief/cmd/brief@v0.14.1
 
 FROM rust:1.98-trixie@sha256:a8a5f0a1e5fe7dfe1d352591e4a1c7dd2c08fd70475cae872cf3458ba0df0546 AS zizmor-build
 ENV CARGO_HTTP_MULTIPLEXING=false

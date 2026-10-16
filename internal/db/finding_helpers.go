@@ -378,6 +378,9 @@ func findingWriteRetryDelay(err error, attempt int) (time.Duration, bool) {
 	if errors.Is(err, errFindingWriteConflict) {
 		return 0, true
 	}
+	if isPostgresSerializationFailure(err) {
+		return retry.BackoffDelay(attempt, time.Millisecond, findingWriteMaxDelay), true
+	}
 	var sqliteErr interface{ Code() int }
 	if !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqliteBusyCode {
 		return 0, false
@@ -388,6 +391,25 @@ func findingWriteRetryDelay(err error, attempt int) (time.Duration, bool) {
 		return 0, true
 	}
 	return retry.BackoffDelay(attempt, time.Millisecond, findingWriteMaxDelay), true
+}
+
+// isPostgresSerializationFailure reports a deadlock (SQLSTATE 40P01), or a
+// serialization failure (40001) on servers running at repeatable read or
+// serializable; at read committed a losing compare-and-swap updates no rows
+// instead. Either way the owned transaction restarts against a fresh snapshot.
+// SQLState() is matched structurally so the db package keeps no direct pgconn
+// dependency.
+func isPostgresSerializationFailure(err error) bool {
+	var pgErr interface{ SQLState() string }
+	if !errors.As(err, &pgErr) {
+		return false
+	}
+	switch pgErr.SQLState() {
+	case "40001", "40P01":
+		return true
+	default:
+		return false
+	}
 }
 
 // findingTimeFieldAccessor mirrors findingFieldAccessor for timestamp

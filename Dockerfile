@@ -12,11 +12,11 @@ RUN CGO_ENABLED=0 go build -ldflags "-X main.commit=${COMMIT}" -o /scrutineer ./
 
 FROM node:26-alpine@sha256:0b36e8c136b94cd4fcf02188228e76c31ad5872eef3fec8cbd2eee500cfd9e80 AS claude
 
-RUN npm install -g @anthropic-ai/claude-code@2.1.292
+RUN npm install -g @anthropic-ai/claude-code@2.1.295
 
 FROM python:3.14-alpine@sha256:f6a589d43c42b9e7f7dc67a12d37132491f362859a5d750607710cc56da3bc72 AS python-tools
 
-ARG SEMGREP_VERSION=1.179.0
+ARG SEMGREP_VERSION=1.180.0
 
 ARG BANDIT_VERSION=1.9.4
 
@@ -29,7 +29,7 @@ RUN GOBIN=/out CGO_ENABLED=0 go install -ldflags "-X=github.com/betterleaks/bett
 
 RUN GOBIN=/out go install github.com/git-pkgs/git-pkgs@v0.21.0
 
-RUN GOBIN=/out go install github.com/git-pkgs/brief/cmd/brief@v0.14.0
+RUN GOBIN=/out go install github.com/git-pkgs/brief/cmd/brief@v0.14.1
 
 # vid links tree-sitter grammars (C), so unlike the main binary it needs
 # cgo; build-base provides gcc and musl headers, matching the musl-based

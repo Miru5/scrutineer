@@ -364,10 +364,13 @@ paths:
         Records a single finding emitted mid-scan so sibling scans in the same
         `scan_group` can read it before this scan completes. The body is one
         finding in the same shape it has in the skill's `report.json`; the
-        scan's identity (scan id, repository, commit, sub-path) is stamped from
+        scan's identity (scan id, repository, commit, subpath) is stamped from
         the bearer token, never trusted from the body. The finding still
         belongs in the final `report.json`, which reconciles against the
         streamed row by fingerprint rather than duplicating it.
+        If PoC capture fails, the finding is still saved and the 201 response
+        includes `poc_capture_error`. Correct the files and publish again to
+        retry capture.
       operationId: streamRepositoryFinding
       parameters:
         - $ref: '#/components/parameters/RepositoryID'
@@ -744,6 +747,47 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/FindingReference' }
 
+  /findings/{id}/submissions:
+    post:
+      summary: Record a report a skill filed with an outside recipient
+      description: |
+        Records a GitHub private vulnerability report filed by the report-upstream skill. In one write it stores
+        the submission with the report as sent, adds a ghsa-upstream reference and an outbound communication,
+        moves a finding not yet reported to reported, and logs disclosure.pvr_submitted. Requires a scan token
+        scoped to the finding.
+      operationId: recordFindingSubmission
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [channel, external_id, url, body, request]
+              properties:
+                channel: { type: string, enum: [pvr] }
+                endpoint: { type: string, description: Where the report was sent. }
+                external_id: { type: string, description: The GHSA ID. }
+                url: { type: string, description: The advisory page. }
+                summary: { type: string, description: Summary for the reference. }
+                actor: { type: string }
+                body: { type: string, description: The outbound communication text. }
+                request: { type: object, description: The report body exactly as sent. }
+                response: { type: object, description: The recipient response. }
+      responses:
+        '201':
+          description: Created
+        '403':
+          description: The scan token is not scoped to this finding.
+        '412':
+          description: The finding is not viable for disclosure.
+        '422':
+          description: Missing fields or a channel other than pvr.
+
   /findings/{id}/labels:
     put:
       summary: Replace the set of labels on a finding
@@ -998,6 +1042,26 @@ paths:
           description: Host header is not localhost
 
   /v1/repositories/{id}:
+    get:
+      summary: Get one repository
+      description: |
+        Returns one repository with the same shape as a line of the
+        repositories JSONL export: selected scalar columns, the latest scan
+        summary and the curated findings count. Operator token;
+        localhost-only. Not reachable with a per-scan bearer token.
+      operationId: getRepositoryExport
+      security: [{ operatorToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/RepositoryID'
+      responses:
+        '200':
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepositoryExport' }
+        '400': { description: 'Invalid repository id, or an unsupported `format` or an `encrypt`, `scope` or `include` query value' }
+        '403': { description: Host header is not localhost }
+        '404': { description: Repository not found }
     delete:
       summary: Delete a repository and its linked data
       description: |
@@ -1020,7 +1084,7 @@ paths:
 
   /v1/repositories/{id}/findings:
     get:
-      summary: Export findings for a repository (JSONL, or a shareable bundle)
+      summary: Export findings for a repository (JSONL, a shareable bundle, or SARIF)
       description: |
         With `format=jsonl` (the default) returns one JSON object per line
         (`application/x-ndjson`), each a `FindingExport` carrying the full set
@@ -1044,10 +1108,17 @@ paths:
         snippet embeds verbatim source, which a cross-party share must not leak.
 
         Adding `encrypt=1` (bundle only) wraps the bundle in armored age,
-        encrypted to every configured recipient. Adding `scope=findings` (either
+        encrypted to every configured recipient. Adding `scope=findings` (any
         format) curates the export to the Findings bucket (deep-dive and
         vuln-scan audits plus operator imports), dropping per-repo scanner
-        noise. Operator token; localhost-only.
+        noise.
+
+        With `format=sarif` returns one SARIF 2.1.0 log with a run per
+        observed revision. Disclosure drafts, recipients, notes and
+        communications are never included, and each result records its latest
+        `verify` outcome (or `unverified`) apart from the audit's own evidence.
+        See docs/sarif-export.md for the field mapping. Operator token;
+        localhost-only.
       operationId: exportRepositoryFindings
       security: [{ operatorToken: [] }]
       parameters:
@@ -1056,8 +1127,9 @@ paths:
           in: query
           description: |
             `jsonl` (default) streams NDJSON; `bundle` returns one JSON sharing
-            document. Other values get a 400.
-          schema: { type: string, enum: [jsonl, bundle] }
+            document; `sarif` returns one SARIF 2.1.0 log. Other values get a
+            400.
+          schema: { type: string, enum: [jsonl, bundle, sarif] }
         - name: encrypt
           in: query
           description: |
@@ -1068,7 +1140,7 @@ paths:
         - name: scope
           in: query
           description: |
-            `findings` curates a `jsonl` or `bundle` export to the Findings
+            `findings` curates a `jsonl`, `bundle` or `sarif` export to the Findings
             bucket (deep-dive and vuln-scan audits plus operator imports),
             excluding per-repo scanner noise. It combines with `severity` and
             `status`. Any other value, or use on the cross-repo
@@ -1098,13 +1170,18 @@ paths:
         '200':
           description: |
             JSONL stream (`format=jsonl`), a JSON sharing bundle
-            (`format=bundle`), or armored age ciphertext
-            (`format=bundle&encrypt=1`).
+            (`format=bundle`), a SARIF 2.1.0 log (`format=sarif`), or armored
+            age ciphertext (`format=bundle&encrypt=1`).
           content:
             application/x-ndjson:
               schema: { $ref: '#/components/schemas/FindingExport' }
             application/json:
-              schema: { $ref: '#/components/schemas/ImportMinimal' }
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ImportMinimal'
+                  - type: object
+                    description: SARIF 2.1.0 log (`format=sarif`), valid against the OASIS sarif-schema-2.1.0.json.
+                    required: [version, runs]
             text/plain:
               schema:
                 type: string
@@ -1149,6 +1226,28 @@ paths:
           description: Host header is not localhost
 
   /v1/findings/{id}:
+    get:
+      summary: Get one finding
+      description: |
+        Returns one finding with the same shape as a line of the findings
+        JSONL export, carrying the full set of `db.Finding` columns. Operator
+        token; localhost-only. Not reachable with a per-scan bearer token.
+      operationId: getFindingExport
+      security: [{ operatorToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: The finding.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FindingExport' }
+        '400': { description: 'Invalid finding id, or an unsupported `format` or an `encrypt`, `scope` or `include` query value' }
+        '403': { description: Host header is not localhost }
+        '404': { description: Finding not found }
     delete:
       summary: Delete one finding and its linked data
       description: |
@@ -1629,6 +1728,7 @@ components:
         scan_id:       { type: integer, format: int64 }
         repository_id: { type: integer, format: int64 }
         finding_id:    { type: string, description: Short id within the scan report (F1, F2, ...). }
+        poc_capture_error: { type: string, description: "Present on streamed publication when the finding was saved but PoC capture failed." }
         sinks:         { type: string, description: Comma-joined sink ids. }
         title:         { type: string }
         severity:      { type: string, enum: [Critical, High, Medium, Low] }
@@ -1970,7 +2070,7 @@ components:
                 items:
                   type: object
                   properties:
-                    channel:      { type: string, enum: [email, ghsa, issue, pr, direct, registry] }
+                    channel:      { type: string, enum: [email, ghsa, issue, pr, direct, registry, vince, akrites] }
                     direction:    { type: string, enum: [outbound, inbound] }
                     actor:        { type: string }
                     body:         { type: string }
@@ -2080,7 +2180,7 @@ components:
       properties:
         id:           { type: integer, format: int64 }
         finding_id:   { type: integer, format: int64 }
-        channel:      { type: string, enum: [email, ghsa, issue, pr, direct, registry] }
+        channel:      { type: string, enum: [email, ghsa, issue, pr, direct, registry, vince, akrites] }
         direction:    { type: string, enum: [outbound, inbound] }
         actor:        { type: string }
         body:         { type: string }
