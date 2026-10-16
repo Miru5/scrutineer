@@ -364,7 +364,7 @@ paths:
         Records a single finding emitted mid-scan so sibling scans in the same
         `scan_group` can read it before this scan completes. The body is one
         finding in the same shape it has in the skill's `report.json`; the
-        scan's identity (scan id, repository, commit, sub-path) is stamped from
+        scan's identity (scan id, repository, commit, subpath) is stamped from
         the bearer token, never trusted from the body. The finding still
         belongs in the final `report.json`, which reconciles against the
         streamed row by fingerprint rather than duplicating it.

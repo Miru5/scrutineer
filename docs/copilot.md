@@ -67,7 +67,7 @@ The copilot backend requires the containerised runner. `--no-container` with
 runner image, not on the host, and the local fallback (`LocalClaude`) is
 claude-only.
 
-## How the harness maps
+## How the backend maps
 
 | Aspect | claude | copilot |
 | --- | --- | --- |
@@ -181,7 +181,7 @@ parent stream.
 
 ## See also
 
-- `docs/codex.md`: the codex backend, including the "Adding another harness"
+- `docs/codex.md`: the codex backend, including the "Adding another backend"
   section that copilot follows.
 - `docs/opencode.md`: the opencode backend.
 - `internal/worker/harness.go`: the `Harness` interface aliases; the

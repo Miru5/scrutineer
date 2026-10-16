@@ -386,7 +386,7 @@ func (w *Worker) parseDependenciesOutput(scan *db.Scan, report string, emit func
 	// Per-sub-package snapshots are deferred until SBOMUpload/Dependency are
 	// keyed on sub-path.
 	if scan.SubPath != "" {
-		emit(Event{Kind: KindText, Text: "sub-path scan: repo-level dependency rows and SBOM snapshot unchanged"})
+		emit(Event{Kind: KindText, Text: "subpath scan: repo-level dependency rows and SBOM snapshot unchanged"})
 		return nil
 	}
 
@@ -947,7 +947,7 @@ func (w *Worker) parseComplianceOutput(scan *db.Scan, report string, emit func(E
 		return fmt.Errorf("compliance report carries %d controls but total says %d", len(result.Controls), result.Total)
 	}
 	if scan.SubPath != "" {
-		emit(Event{Kind: KindText, Text: "sub-path scan: repo-level compliance rows unchanged"})
+		emit(Event{Kind: KindText, Text: "subpath scan: repo-level compliance rows unchanged"})
 		return nil
 	}
 	if len(result.Controls) == 0 {
