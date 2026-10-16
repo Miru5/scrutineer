@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -1627,12 +1628,21 @@ func TestExportEncryptRejectsWithoutBundle(t *testing.T) {
 func TestExportEncryptRejectedOnGlobalEndpoints(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
-	seedFindings(t, s)
+	repo := seedFindings(t, s)
+	var finding db.Finding
+	if err := s.DB.Where("repository_id = ?", repo.ID).First(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	// encrypt only applies to per-repo bundle exports. The cross-repo
-	// findings and scans endpoints must 400, never silently stream plaintext
-	// NDJSON when encryption was requested.
-	for _, path := range []string{"/api/v1/findings?encrypt=1", "/api/v1/scans?encrypt=1"} {
+	// findings and scans endpoints and the single-row reads must 400, never
+	// silently return plaintext when encryption was requested.
+	for _, path := range []string{
+		"/api/v1/findings?encrypt=1",
+		"/api/v1/scans?encrypt=1",
+		"/api/v1/repositories/" + strconv.FormatUint(uint64(repo.ID), 10) + "?encrypt=1",
+		"/api/v1/findings/" + strconv.FormatUint(uint64(finding.ID), 10) + "?encrypt=1",
+	} {
 		r := httptest.NewRequest("GET", path, nil)
 		asOperator(r)
 		w := httptest.NewRecorder()
@@ -2446,5 +2456,138 @@ func TestExportBundleEncryptedRoundTrip_includeAll(t *testing.T) {
 	s.DB.Model(&db.FindingNote{}).Where("finding_id = ?", got.ID).Count(&notes)
 	if notes != 2 {
 		t.Errorf("notes after encrypted round-trip = %d, want 2", notes)
+	}
+}
+
+func getOperatorJSON(t *testing.T, s *Server, path string) (int, map[string]any) {
+	t.Helper()
+	r := httptest.NewRequest("GET", path, nil)
+	asOperator(r)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	var body map[string]any
+	if w.Code == http.StatusOK {
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatalf("%s: invalid JSON %q: %v", path, w.Body.String(), err)
+		}
+	}
+	return w.Code, body
+}
+
+// TestExportRepositoryMatchesListRow pins the single-repository read to the
+// shape of the matching repositories JSONL line, with and without scans.
+func TestExportRepositoryMatchesListRow(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	scanned := db.Repository{URL: "https://github.com/example/scanned", Name: "scanned", FullName: "example/scanned", Owner: "example", Languages: "Go", Stars: 7, Metadata: "large metadata blob"}
+	s.DB.Create(&scanned)
+	deep := db.Scan{RepositoryID: scanned.ID, Kind: "skill", Status: db.ScanDone, SkillName: deepDiveSkillName, Commit: "abc123"}
+	s.DB.Create(&deep)
+	s.DB.Create(&db.Finding{ScanID: deep.ID, RepositoryID: scanned.ID, Title: "SSRF", Severity: sevHigh, Status: db.FindingNew})
+	unscanned := db.Repository{URL: "https://github.com/example/unscanned", Name: "unscanned"}
+	s.DB.Create(&unscanned)
+
+	r := httptest.NewRequest("GET", "/api/v1/repositories", nil)
+	asOperator(r)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	rows := readJSONL(t, w.Body.String())
+	if len(rows) != 2 {
+		t.Fatalf("got %d list rows, want 2", len(rows))
+	}
+	for _, row := range rows {
+		id := strconv.FormatFloat(row["id"].(float64), 'f', 0, 64)
+		code, single := getOperatorJSON(t, s, "/api/v1/repositories/"+id)
+		if code != http.StatusOK {
+			t.Fatalf("repository %s: status %d", id, code)
+		}
+		if !reflect.DeepEqual(single, row) {
+			t.Errorf("repository %s:\nsingle = %#v\nlist   = %#v", id, single, row)
+		}
+	}
+}
+
+// TestExportFindingMatchesListRow pins the single-finding read to the shape of
+// the matching findings JSONL line.
+func TestExportFindingMatchesListRow(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	seedFindings(t, s)
+
+	r := httptest.NewRequest("GET", "/api/v1/findings", nil)
+	asOperator(r)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	rows := readJSONL(t, w.Body.String())
+	if len(rows) != 3 {
+		t.Fatalf("got %d list rows, want 3", len(rows))
+	}
+	for _, row := range rows {
+		id := strconv.FormatFloat(row["id"].(float64), 'f', 0, 64)
+		code, single := getOperatorJSON(t, s, "/api/v1/findings/"+id)
+		if code != http.StatusOK {
+			t.Fatalf("finding %s: status %d", id, code)
+		}
+		if !reflect.DeepEqual(single, row) {
+			t.Errorf("finding %s:\nsingle = %#v\nlist   = %#v", id, single, row)
+		}
+	}
+}
+
+func TestExportSingleRowRejectsBadAndUnknownIDs(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+
+	for _, kind := range []string{"repositories", "findings"} {
+		for _, tc := range []struct {
+			id   string
+			want int
+		}{
+			{"abc", http.StatusBadRequest},
+			{"0", http.StatusBadRequest},
+			{"-1", http.StatusBadRequest},
+			{"9999", http.StatusNotFound},
+		} {
+			if code, _ := getOperatorJSON(t, s, "/api/v1/"+kind+"/"+tc.id); code != tc.want {
+				t.Errorf("GET /api/v1/%s/%s: status %d, want %d", kind, tc.id, code, tc.want)
+			}
+		}
+	}
+}
+
+func TestExportSingleRowRejectsScanBearer(t *testing.T) {
+	s, done := newTestServer(t)
+	defer done()
+	repo := seedFindings(t, s)
+	scan := db.Scan{RepositoryID: repo.ID, Kind: "skill", Status: db.ScanRunning, SkillName: deepDiveSkillName, APIToken: "scan-bearer-token"}
+	s.DB.Create(&scan)
+	var finding db.Finding
+	if err := s.DB.Where("repository_id = ?", repo.ID).First(&finding).Error; err != nil {
+		t.Fatal(err)
+	}
+	// The same bearer is valid on the scan API, so the 401s below come from
+	// the operator boundary rather than from a dead token.
+	r := httptest.NewRequest("GET", "/api/repositories/"+strconv.FormatUint(uint64(repo.ID), 10), nil)
+	r.Host = testHost
+	r.Header.Set("Authorization", "Bearer "+scan.APIToken)
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("scan API with the scan bearer: status %d, want 200. body=%s", w.Code, w.Body)
+	}
+
+	for _, path := range []string{
+		"/api/v1/repositories/" + strconv.FormatUint(uint64(repo.ID), 10),
+		"/api/v1/findings/" + strconv.FormatUint(uint64(finding.ID), 10),
+	} {
+		r := httptest.NewRequest("GET", path, nil)
+		r.Host = testHost
+		r.Header.Set("Authorization", "Bearer "+scan.APIToken)
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Errorf("%s with a scan bearer: status %d, want %d", path, w.Code, http.StatusUnauthorized)
+		}
 	}
 }

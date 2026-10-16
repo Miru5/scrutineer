@@ -170,8 +170,7 @@ func TestOverageDoesNotLockOrdinaryScanWork(t *testing.T) {
 				}
 			case <-time.After(5 * time.Second):
 				w.overageMu.Unlock()
-				err := <-done
-				t.Fatalf("ordinary scan work waited for overage mutex: %v", err)
+				t.Fatalf("ordinary scan work waited for overage mutex, then returned %v", <-done)
 			}
 		})
 	}
