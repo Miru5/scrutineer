@@ -5823,7 +5823,7 @@ func TestRepoCreate_existingRepoWithoutBranchDoesNotEnqueue(t *testing.T) {
 	}
 }
 
-// The workflow card must say which actions enqueue a model job and which only
+// The workflow card must say which actions enqueue a model scan and which only
 // record a decision, so a regression to the ambiguous Verify and Triage labels
 // fails here rather than on an operator's token bill.
 func TestFindingShow_workflowActionsStateTheirEffect(t *testing.T) {
@@ -5837,7 +5837,7 @@ func TestFindingShow_workflowActionsStateTheirEffect(t *testing.T) {
 	}
 	s.DB.Create(&db.Dependent{RepositoryID: lib.ID, Name: "downstream", Ecosystem: "npm"})
 
-	triagedCost := "Draft disclosure, Reassess viability, Propose patch and Draft mitigation each start a model job and use tokens"
+	triagedCost := "Draft disclosure, Reassess viability, Propose patch and Draft mitigation each start a model scan and use tokens"
 	cases := []struct {
 		name    string
 		repo    db.Repository
@@ -5847,10 +5847,10 @@ func TestFindingShow_workflowActionsStateTheirEffect(t *testing.T) {
 		gone    []string
 	}{
 		{"new", app, db.FindingNew, []string{"verify", "status"},
-			[]string{"Run verification", "Mark triaged", "starts a model job to check this finding and uses tokens", "mark it triaged to save your review decision"},
+			[]string{"Run verification", "Mark triaged", "starts a model scan to check this finding and uses tokens", "mark it triaged to save your review decision"},
 			[]string{"Skip to triage"}},
 		{"enriched", app, db.FindingEnriched, []string{"critic", "status"},
-			[]string{"Mark triaged", "Assess viability", "Mark triaged saves your review decision", "Assess viability starts a model job and uses tokens"},
+			[]string{"Mark triaged", "Assess viability", "Mark triaged saves your review decision", "Assess viability starts a model scan and uses tokens"},
 			[]string{"</i> Triage\n"}},
 		{"triaged with dependents", lib, db.FindingTriaged, []string{"disclose", "critic", "patch", "mitigate"},
 			[]string{"Draft disclosure", "Review and edit the generated draft", triagedCost},

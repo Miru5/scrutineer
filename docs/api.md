@@ -54,12 +54,15 @@ curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8080
 curl -H "Authorization: Bearer $(cat data/operator-token)" http://127.0.0.1:8080/api/v1/scans
 ```
 
+`GET /api/v1/repositories/{id}` and `GET /api/v1/findings/{id}` return a single row as JSON, with the same shape as a line of the matching JSONL export. A malformed ID returns `400` and an unknown one `404`. Like the cross-repository exports, they reject `encrypt`, `scope`, `include` and any `format` other than `jsonl` with `400` rather than returning plaintext.
+
 This surface includes JSONL exports, repository finding bundles, report imports, operator delete operations, and instance-wide audit exports. Because these routes can read or modify data across the whole instance, they are kept outside the repository-scoped skill API.
 
 Detailed workflows:
 
 - [Importing findings](import.md) covers `POST /api/v1/import`, accepted formats, repository resolution, and revalidation.
 - [Encrypted findings sharing](encrypted-sharing.md) covers repository bundles, archival exports, age encryption, and round trips through the import route.
+- [Exporting findings as SARIF](sarif-export.md) covers `format=sarif` on the repository findings export and handing the log to OSS-CRS as bug candidates.
 - The [OpenAPI document](../openapi.yaml) defines the JSONL exports, filters, delete operations, and audit endpoints.
 
 ## Federation claim check: `/claim-check`

@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"scrutineer/internal/akrites"
 	"scrutineer/internal/db"
 	"scrutineer/internal/queue"
 	"scrutineer/internal/repoconfig"
@@ -146,9 +147,11 @@ type Server struct {
 	// VINCE holds the config-file-only API credential and reporter defaults
 	// for native CERT/CC submissions. vinceHTTPClient is injectable so tests
 	// can use httptest without changing the credential-bearing config shape.
-	VINCE           vince.Config
-	vinceHTTPClient *http.Client
-	vinceSubmitMu   sync.Mutex
+	VINCE             vince.Config
+	vinceHTTPClient   *http.Client
+	vinceSubmitMu     sync.Mutex
+	Akrites           akrites.Config
+	akritesHTTPClient *http.Client
 	// FederationPublicFeed and FederationMembersFeed are the git remotes
 	// the export job pushes each tier to; FederationImportFeeds are the
 	// peer remotes the import job pulls; all three empty leaves the
@@ -566,6 +569,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /findings/{id}/disclosure.html", s.findingDisclosureHTML)
 	mux.HandleFunc("GET /findings/{id}/vince", s.findingVINCEPreview)
 	mux.HandleFunc("POST /findings/{id}/vince", s.findingVINCESubmit)
+	mux.HandleFunc("GET /findings/{id}/akrites", s.findingAkritesPreview)
+	mux.HandleFunc("POST /findings/{id}/akrites", s.findingAkritesSubmit)
 	mux.HandleFunc("POST /findings/{id}/status", s.findingStatus)
 	mux.HandleFunc("POST /findings/{id}/exploited-in-wild", s.findingExploitedInWild)
 	mux.HandleFunc("POST /findings/{id}/verify", s.findingVerify)
@@ -2141,7 +2146,7 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	vinceReason := "VINCE API key is not configured"
 	vinceReady := false
 	if s.VINCE.Enabled() {
-		if err := vinceEligibility(f, notes, refs); err != nil {
+		if err := vinceEligibility(f, notes); err != nil {
 			vinceReason = err.Error()
 		} else {
 			vinceReady = true
@@ -2150,6 +2155,13 @@ func (s *Server) findingShow(w http.ResponseWriter, r *http.Request) {
 	}
 	data["VINCEReady"] = vinceReady
 	data["VINCEReason"] = vinceReason
+	akritesLink := s.Akrites.Enabled()
+	if !akritesLink {
+		var submissions int64
+		s.DB.Model(&db.DisclosureSubmission{}).Where("finding_id = ? AND channel = ?", f.ID, db.DisclosureChannelAkrites).Count(&submissions)
+		akritesLink = submissions > 0
+	}
+	data["AkritesLink"] = akritesLink
 	if id, c, ok := LookupCWE(f.CWE); ok {
 		data["CWE"] = map[string]any{"ID": id, "Name": c.Name, "Description": c.Description}
 	}
@@ -3258,7 +3270,7 @@ func deleteReviewConfirmations(tx *gorm.DB, where string, args ...any) error {
 func findingChildModels() []any {
 	return []any{
 		&db.FindingNote{}, &db.FindingCommunication{}, &db.FindingReference{},
-		&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{}, &db.FeedbackConfirmation{},
+		&db.FindingHistory{}, &db.FindingDependent{}, &db.FindingReview{}, &db.FeedbackConfirmation{}, &db.DisclosureSubmission{},
 		&db.FindingVerification{}, &db.FindingAttackPath{}, &db.FindingPoC{},
 		&db.RemediationValidation{}, &db.RemediationAttempt{},
 	}

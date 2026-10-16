@@ -11,7 +11,7 @@ metadata:
 
 # subprojects
 
-List the discrete scannable units inside a repository so the analyst can scope security scans to a sub-path instead of the whole tree. A repository with a single package at the root gets an empty list because the default scan already covers it. A monorepo like apache/airflow or kubernetes/kubernetes gets a row per sub-package.
+List the discrete scannable units inside a repository so the analyst can scope security scans to a subpath instead of the whole tree. A repository with a single package at the root gets an empty list because the default scan already covers it. A monorepo like apache/airflow or kubernetes/kubernetes gets a row per sub-package.
 
 When subprojects are present, also inspect the root manifests for a package with first-party code outside those subprojects. Emit that package with `path: "."`, its manifest name, and its package kind. For example, a root `composer.json` with PSR-4 autoloading into `Classes/` defines a PHP package even when `packages/*` contains JavaScript workspaces. Emit the root Composer package alongside the JavaScript packages. Its root scan retains the manifest, configuration, and other build inputs; do not emit `Classes/` as an isolated package.
 
@@ -20,7 +20,7 @@ A root used only to coordinate workspaces or shared development tools does not n
 ## Workspace
 
 - `./src` — the repository at HEAD. Read-only.
-- `./context.json` — has `scrutineer.api_base`, `scrutineer.token`, `scrutineer.repository_id`. Not finding-scoped, not sub-path-scoped (this skill *produces* sub-paths; it does not consume one).
+- `./context.json` — has `scrutineer.api_base`, `scrutineer.token`, `scrutineer.repository_id`. Not finding-scoped, not subpath-scoped (this skill *produces* subpaths; it does not consume one).
 - `./report.json` — write the enumeration here.
 - `./schema.json` — output shape.
 
