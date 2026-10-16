@@ -2815,8 +2815,8 @@ func (s *Server) loadRepoSubprojectView(repoID uint) repoSubprojectView {
 		SubPath string
 		N       int
 	}, 0)
-	s.DB.Raw(`SELECT sub_path, COUNT(*) AS n FROM scans
-		WHERE repository_id = ? AND sub_path != '' GROUP BY sub_path`,
+	s.DB.Raw(`SELECT COALESCE(sub_path, '') AS sub_path, COUNT(*) AS n FROM scans
+		WHERE repository_id = ? GROUP BY COALESCE(sub_path, '')`,
 		repoID).Scan(&rows)
 	for _, r := range rows {
 		view.ScanCount[r.SubPath] = r.N
@@ -2961,10 +2961,12 @@ func (s *Server) repoScanAll(w http.ResponseWriter, r *http.Request) {
 	group := uuid.NewString()
 	var queued, skipped, errored int
 	for _, sub := range subprojects {
+		subPath := sub.ScanSubPath()
 		var inflight int64
 		s.DB.Model(&db.Scan{}).
 			Where("repository_id = ? AND sub_path = ? AND skill_id = ? AND status IN ?",
-				repo.ID, sub.Path, skill.ID, []db.ScanStatus{db.ScanQueued, db.ScanRunning}).
+				repo.ID, subPath, skill.ID, []db.ScanStatus{db.ScanQueued, db.ScanRunning}).
+			Where("COALESCE(focus_area, '') = '' AND COALESCE(exploration_mode, '') = ''").
 			Count(&inflight)
 		if inflight > 0 {
 			skipped++
@@ -2972,7 +2974,7 @@ func (s *Server) repoScanAll(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := s.enqueueSkillWith(r.Context(), repo.ID, skill.ID, ScanOpts{
 			Model:     model,
-			SubPath:   sub.Path,
+			SubPath:   subPath,
 			ScanGroup: group,
 		}); err != nil {
 			errored++

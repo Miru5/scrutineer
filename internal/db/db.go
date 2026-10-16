@@ -2194,9 +2194,8 @@ type Subproject struct {
 	ID           uint `gorm:"primarykey"`
 	RepositoryID uint `gorm:"index;not null"`
 
-	// Path is the sub-folder within the clone, relative to root. Empty
-	// is not allowed — the root case is represented by absence of any
-	// Subproject row, not by a Subproject with Path "".
+	// Path is relative to the clone root. "." identifies a root package;
+	// its scans use the empty SubPath shared by repository-wide scans.
 	Path string `gorm:"not null"`
 	// Name is a short human label ("airflow-core", "cli", ...). Falls
 	// back to the last segment of Path when the skill cannot infer one.
@@ -2217,6 +2216,13 @@ type Subproject struct {
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+}
+
+func (s Subproject) ScanSubPath() string {
+	if s.Path == "." {
+		return ""
+	}
+	return s.Path
 }
 
 // EnsureSubproject records a monorepo sub-package an operator submitted
@@ -2248,11 +2254,12 @@ func EnsureSubproject(gdb *gorm.DB, repoID uint, subPath string) error {
 // single-package repo (no sub-path, or no per-subproject channel) behaves
 // exactly as before. Empty when neither is set.
 func EffectiveDisclosureChannel(gdb *gorm.DB, repoID uint, subPath string) string {
-	if subPath != "" {
-		var sub Subproject
-		if err := gdb.Where("repository_id = ? AND path = ?", repoID, subPath).First(&sub).Error; err == nil && sub.DisclosureChannel != "" {
-			return sub.DisclosureChannel
-		}
+	if subPath == "" {
+		subPath = "."
+	}
+	var sub Subproject
+	if err := gdb.Where("repository_id = ? AND path = ?", repoID, subPath).First(&sub).Error; err == nil && sub.DisclosureChannel != "" {
+		return sub.DisclosureChannel
 	}
 	var repo Repository
 	if err := gdb.Select("disclosure_channel").First(&repo, repoID).Error; err != nil {

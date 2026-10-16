@@ -261,7 +261,7 @@
           <button type="submit" class="btn-sm-outline"><i data-lucide="play"></i> Scan all</button>
         </form>
       </div>
-      <p class="text-sm text-muted-foreground mb-2">Detected scannable units inside this repository. Each can be scanned independently with its own findings stream.</p>
+      <p class="text-sm text-muted-foreground mb-2">Detected packages in this repository, including any root package with code outside its subprojects. Root scans retain the whole repository and its build configuration.</p>
       <table class="table w-full mb-6">
         <thead><tr>
           <th class="w-48">Path</th>
@@ -275,13 +275,13 @@
         {{$counts := .SubScanCount}}
         {{range .Subprojects}}
           <tr>
-            <td><a class="hover:underline" href="/repositories/{{$repoID}}/subprojects/{{.ID}}"><code class="text-xs">{{.Path}}</code></a>{{if and .Name (ne .Name .Path)}}<div class="text-xs text-muted-foreground">{{.Name}}</div>{{end}}</td>
+            <td><a class="hover:underline" href="/repositories/{{$repoID}}/subprojects/{{.ID}}"><code class="text-xs">{{if eq .Path "."}}root{{else}}{{.Path}}{{end}}</code></a>{{if and .Name (ne .Name .Path)}}<div class="text-xs text-muted-foreground">{{.Name}}</div>{{end}}</td>
             <td>{{if .Kind}}<span class="badge-outline text-xs">{{.Kind}}</span>{{end}}</td>
             <td class="whitespace-normal text-sm text-muted-foreground">{{.Description}}</td>
-            <td class="text-right text-sm text-muted-foreground">{{index $counts .Path}}</td>
+            <td class="text-right text-sm text-muted-foreground">{{index $counts .ScanSubPath}}</td>
             <td>
               <form method="post" action="/repositories/{{$repoID}}/scan" hx-post="/repositories/{{$repoID}}/scan" hx-swap="none">
-                <input type="hidden" name="sub_path" value="{{.Path}}">
+                <input type="hidden" name="sub_path" value="{{.ScanSubPath}}">
                 <button type="submit" class="btn-sm-outline"><i data-lucide="play"></i> Scan</button>
               </form>
             </td>
