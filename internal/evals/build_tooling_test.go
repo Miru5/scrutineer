@@ -52,7 +52,9 @@ with tempfile.TemporaryDirectory() as tmp:
     pm['install'](index, 'app', prefix)
     assert (prefix / 'lib' / 'built-lib').exists() and (prefix / 'app' / 'built-app').exists()
     # The manifest bin value is spliced into the shell command that links it.
-    assert (prefix / 'bin' / 'run').is_symlink()
+    # Check that the command ran, not that it made a symlink: on Windows the
+    # MSYS ln on PATH copies the file instead of linking it.
+    assert (prefix / 'bin' / 'run').exists()
 
 consumer = runpy.run_path('../../evals/fixtures/build-tool-consumer/app.py')
 assert consumer['add_note']('x' * 500) == 1 and len(consumer['list_notes']()[0]) == 280
