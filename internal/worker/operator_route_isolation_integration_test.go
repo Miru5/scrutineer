@@ -5,7 +5,7 @@ package worker
 // code reaches the skill API through the egress sidecar as inspected HTTP, so
 // these probes try to make the API server see a loopback Host: a forged Host
 // header, an absolute target naming loopback or the gateway, a CONNECT tunnel
-// carrying its own Host and a raw request that skips the proxy.
+// to the API port and a raw request that skips the proxy.
 //
 // The positive control is a proxied request from the same scan that does reach
 // the API stand-in, so a broken proxy path can never pass for isolation. The
@@ -17,6 +17,7 @@ package worker
 import (
 	"context"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,14 +38,17 @@ rec forged_localhost code -H 'Host: localhost:@API@' http://host.docker.internal
 rec target_loopback code http://127.0.0.1:@API@/api/v1/@target_loopback@
 rec target_localhost code http://localhost:@API@/api/v1/@target_localhost@
 rec target_gateway code http://@GATEWAY@:@API@/api/v1/@target_gateway@
-rec connect_api tunnel -H 'Host: 127.0.0.1' http://host.docker.internal:@API@/api/v1/@connect_api@
-rec connect_api_case tunnel -H 'Host: 127.0.0.1' http://HOST.DOCKER.INTERNAL:@API@/api/v1/@connect_api_case@
-rec connect_gateway tunnel -H 'Host: 127.0.0.1' http://@GATEWAY@:@API@/api/v1/@connect_gateway@
+rec connect_api tunnel http://host.docker.internal:@API@/api/v1/@connect_api@
+rec connect_api_case tunnel http://HOST.DOCKER.INTERNAL:@API@/api/v1/@connect_api_case@
+rec connect_gateway tunnel http://@GATEWAY@:@API@/api/v1/@connect_gateway@
 rec raw_api raw @raw_api@
 `
 
 // forgedHostProbes reach the API through the proxy with a forged Host header.
-// The request must arrive, but never with the forged Host.
+// The request must arrive, but never with the forged Host. net/http takes a
+// proxied request's Host from its absolute-form target and the harness proxy
+// rewrites only the URL host, so today's proxy cannot fail these; they guard
+// against a future proxy implementation that forwards the header.
 var forgedHostProbes = []string{"forged_loopback", "forged_localhost"}
 
 // refusedProbes must be refused by the proxy with the code written to .out and
@@ -54,7 +58,7 @@ var refusedProbes = []string{"target_loopback", "target_localhost", "target_gate
 func operatorRouteMarkers(t *testing.T) map[string]string {
 	t.Helper()
 	markers := map[string]string{}
-	for _, n := range append(append(append([]string{}, forgedHostProbes...), refusedProbes...), "raw_api") {
+	for _, n := range slices.Concat(forgedHostProbes, refusedProbes, []string{"raw_api"}) {
 		markers[n] = newMarker(t, n)
 	}
 	return markers
@@ -154,9 +158,9 @@ func assertRawAPIBlocked(t *testing.T, env isolationEnv, files, markers map[stri
 	if len(controlHosts) == 0 {
 		t.Skip(controlFailedMessage)
 	}
-	// The control sends Host: 127.0.0.1 straight to the API, so the stand-in
-	// must record it as loopback. Otherwise the forged Host checks could never
-	// fail.
+	// The control sends Host: 127.0.0.1 straight to the API, which proves the
+	// recorder keeps a loopback Host as it arrives. A proxy that forwarded a
+	// forged Host would therefore fail the forged Host checks.
 	if !isLoopbackHost(controlHosts[0]) {
 		t.Fatalf("control Host %q was not recorded as loopback", controlHosts[0])
 	}
