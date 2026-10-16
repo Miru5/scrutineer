@@ -16,9 +16,10 @@ func TestBundledBuildToolingAuditMetadata(t *testing.T) {
 	if skill.Name != "audit-build-tooling" || skill.OutputKind != "findings" || skill.Model != "high" || skill.MaxTurns != 48 || skill.MinConfidence != "high" || skill.SchemaJSON == "" {
 		t.Fatalf("invalid audit metadata: %+v", skill)
 	}
-	// Build tools keep real source under directories named build or out, such
-	// as Bazel's com/google/devtools/build, so those names stay included.
-	for _, path := range []string{"taskrun/plugins.py", "src/cli.go", "package.json", "Makefile", ".github/workflows/ci.yml", "src/main/java/com/google/devtools/build/lib/Runner.java", "internal/build/exec.go", "cmd/out/main.go"} {
+	// Build tools keep real source under directories named build, out, dist or
+	// target, such as Bazel's com/google/devtools/build, Go's src/cmd/dist and
+	// Buck2's src/target, so only root-level dist and target output is excluded.
+	for _, path := range []string{"taskrun/plugins.py", "src/cli.go", "package.json", "Makefile", ".github/workflows/ci.yml", "src/main/java/com/google/devtools/build/lib/Runner.java", "internal/build/exec.go", "cmd/out/main.go", "src/cmd/dist/build.go", "app/buck2_core/src/target/label.rs"} {
 		if !PathIncluded(path, skill.Paths, skill.IgnorePaths) {
 			t.Errorf("excluded %s", path)
 		}

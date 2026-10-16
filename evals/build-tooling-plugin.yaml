@@ -2,8 +2,7 @@ given: a task runner imports every Python plugin found in the workspace before r
 fixture: fixtures/build-tool-runner
 skill: audit-build-tooling
 should_find:
-  - cwe: CWE-829
-    path: taskrun/plugins.py
+  - path: taskrun/plugins.py
     evidence_contains:
       - load_plugins
       - exec_module

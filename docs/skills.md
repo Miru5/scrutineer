@@ -109,15 +109,16 @@ reference does not imply certification.
 The `build-tooling` mode selects `audit-build-tooling` for first-party build
 systems, task runners, compiler or bundler drivers, code generators and
 developer tools that read and act on workspace-controlled input. It also
-selects `audit-injection` when that input reaches process execution or an
-interpreter. A project that only uses a build tool, ships its own Makefile, CI
-configuration or build scripts, or depends on a build library does not
-activate it. A package manager that runs lifecycle scripts can activate both
-this mode and `package-manager` while the shared audits are still enqueued
-once. The audit distinguishes source-proven vulnerabilities from intended
-behavior and evidenced negative results. Guarantees that depend on CI runner,
-cache server or deployment evidence are recorded as unresolved assumptions.
-Its SLSA reference does not imply conformance.
+selects `audit-injection` when the tool splices that input into a command line
+or interpreter input it builds itself; running a declared command as written
+does not. A project that only uses a build tool, ships its own Makefile, CI
+configuration or build scripts, or depends on a build library does not activate
+it. A package manager that runs lifecycle scripts can activate both this mode
+and `package-manager` while the shared audits are still enqueued once. The
+audit distinguishes source-proven vulnerabilities from intended behavior and
+evidenced negative results. Guarantees that depend on CI runner, cache server
+or deployment evidence are recorded as unresolved assumptions. Its SLSA
+reference does not imply conformance.
 
 Add another mode by defining its detection criteria in the triage reference
 and bundling its audit skill and threat model.

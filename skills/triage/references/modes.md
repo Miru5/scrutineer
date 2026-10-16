@@ -107,10 +107,13 @@ alone. Neither do documentation, test-only harnesses, or keywords such as
 borrow one from another monorepo subproject. Keep uncertain classifications
 gated and record the missing evidence.
 
-Enqueue `audit-build-tooling` for a match. Also add `audit-injection` when
-workspace-controlled input reaches process execution, a shell, template
-evaluation or another interpreter. These are ordinary existing skills, not
-copies of their checklists. Gate a companion audit when its source-based
+Enqueue `audit-build-tooling` for a match. Also add `audit-injection` when the
+tool itself splices workspace-controlled values into a command line, shell
+string, template or interpreter input that it builds. Running a command or
+argv list exactly as a task file or manifest declares it is the tool's own
+behavior. `audit-build-tooling` covers it, so it does not add
+`audit-injection` on that evidence alone. These are ordinary existing skills,
+not copies of their checklists. Gate a companion audit when its source-based
 applicability is absent. Union all matching modes' skills with the normal scan
 set before enqueueing: each skill is requested at most once and uses the same
 ref/subpath. Each also obeys the existing active/completed skip set. An

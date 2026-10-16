@@ -204,7 +204,9 @@ func runTriageModeCase(t *testing.T, scan triageScan) (map[string]int, string) {
 	return counts, result.Report
 }
 
-func assertWebModeReport(t *testing.T, tc webModeCase, raw string) {
+// triageReportModes returns the modes a triage report selected, failing the
+// test for a mode listed twice or without evidence.
+func triageReportModes(t *testing.T, raw string) map[string]bool {
 	t.Helper()
 	var report struct {
 		Modes []struct {
@@ -222,6 +224,12 @@ func assertWebModeReport(t *testing.T, tc webModeCase, raw string) {
 		}
 		modes[mode.Name] = true
 	}
+	return modes
+}
+
+func assertWebModeReport(t *testing.T, tc webModeCase, raw string) {
+	t.Helper()
+	modes := triageReportModes(t, raw)
 	if modes["web-api"] != tc.web || modes["package-manager"] != tc.registry {
 		t.Fatalf("modes=%v want web=%t registry=%t", modes, tc.web, tc.registry)
 	}

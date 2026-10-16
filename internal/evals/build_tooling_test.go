@@ -46,10 +46,13 @@ with tempfile.TemporaryDirectory() as tmp:
     index, prefix = Path(tmp) / 'index', Path(tmp) / 'prefix'
     for name, deps, script in (('app', ['lib'], 'touch built-app'), ('lib', [], 'touch built-lib')):
         (index / name).mkdir(parents=True)
-        (index / name / 'package.json').write_text(json.dumps({'dependencies': deps, 'scripts': {'postinstall': script}}))
+        (index / name / 'package.json').write_text(json.dumps({'dependencies': deps, 'scripts': {'postinstall': script}, 'bin': 'run' if name == 'app' else ''}))
+    (index / 'app' / 'run').write_text('#!/bin/sh\n')
     assert pm['resolve'](index, 'app') == ['lib', 'app']
     pm['install'](index, 'app', prefix)
     assert (prefix / 'lib' / 'built-lib').exists() and (prefix / 'app' / 'built-app').exists()
+    # The manifest bin value is spliced into the shell command that links it.
+    assert (prefix / 'bin' / 'run').is_symlink()
 
 consumer = runpy.run_path('../../evals/fixtures/build-tool-consumer/app.py')
 assert consumer['add_note']('x' * 500) == 1 and len(consumer['list_notes']()[0]) == 280
@@ -86,6 +89,7 @@ func TestBuildToolingTriageLive(t *testing.T) {
 		{name: "task runner", fixture: "build-tool-runner", build: true},
 		{name: "consumer", fixture: "build-tool-consumer"},
 		{name: "scoped task runner", fixture: "build-tool-runner", subPath: "taskrun", build: true},
+		{name: "scoped consumer", fixture: "build-tool-runner", subPath: "example-app"},
 		{name: "overlapping modes", fixture: "build-tool-package-manager", build: true, packageManager: true, injection: true},
 		{name: "active audit", fixture: "build-tool-runner", build: true, skipBuild: true},
 	} {
@@ -96,34 +100,16 @@ func TestBuildToolingTriageLive(t *testing.T) {
 func runBuildToolingModeCase(t *testing.T, tc buildToolingModeCase) {
 	t.Helper()
 	counts, report := runTriageModeCase(t, triageScan{fixture: tc.fixture, subPath: tc.subPath, activeSkill: "audit-build-tooling", activeHere: tc.skipBuild})
-	// The runner executes argv lists from its task file, so whether
-	// audit-injection applies there is left to the model. The package
-	// installer runs manifest scripts through a shell, so it must apply.
-	wants := map[string]bool{"audit-build-tooling": tc.build && !tc.skipBuild, "audit-package-manager": tc.packageManager, "audit-web": false, "audit-embedded": false, "threat-model": true}
-	if tc.injection || !tc.build {
-		wants["audit-injection"] = tc.injection
-	}
+	// The runner executes the argv its task file declares, which is not
+	// injection. The installer splices a manifest value into a shell command
+	// it builds, so audit-injection applies there.
+	wants := map[string]bool{"audit-build-tooling": tc.build && !tc.skipBuild, "audit-package-manager": tc.packageManager, "audit-injection": tc.injection, "audit-web": false, "audit-embedded": false, "threat-model": true}
 	for skill, want := range wants {
 		if got := counts["/api/repositories/1/skills/"+skill+"/run"] > 0; got != want {
 			t.Errorf("%s enqueued=%t want=%t; report=%s", skill, got, want, report)
 		}
 	}
-	var parsed struct {
-		Modes []struct {
-			Name     string   `json:"name"`
-			Evidence []string `json:"evidence"`
-		} `json:"modes"`
-	}
-	if err := json.Unmarshal([]byte(report), &parsed); err != nil {
-		t.Fatal(err)
-	}
-	modes := make(map[string]bool)
-	for _, mode := range parsed.Modes {
-		if modes[mode.Name] || len(mode.Evidence) == 0 {
-			t.Errorf("duplicate or unevidenced mode=%+v", mode)
-		}
-		modes[mode.Name] = true
-	}
+	modes := triageReportModes(t, report)
 	if modes["build-tooling"] != tc.build || modes["package-manager"] != tc.packageManager {
 		t.Fatalf("modes=%v want build=%t package-manager=%t", modes, tc.build, tc.packageManager)
 	}
@@ -140,7 +126,7 @@ func TestBuildToolingScenarioRejectsGuardedPathFalsePositive(t *testing.T) {
 	truePositive := Finding{
 		Title:      "Task runner executes workspace plugins without a trust check",
 		CWE:        "CWE-829",
-		Location:   "taskrun/plugins.py:9",
+		Location:   "taskrun/plugins.py:11",
 		Trace:      "run_task calls load_plugins, which runs exec_module on every .taskrun/plugins/*.py file in the checkout before the task starts.",
 		Validation: "Unlike restore_entry, which validates the digest and destination, load_plugins has no trust prompt or opt-in.",
 	}
@@ -150,12 +136,17 @@ func TestBuildToolingScenarioRejectsGuardedPathFalsePositive(t *testing.T) {
 		Location: "taskrun/cache.py:14",
 		Trace:    "restore_entry joins an entry name onto the destination directory.",
 	}
+	// The threat model lists CWE-94 and CWE-829 for this pattern, so the
+	// scenario must not depend on which one the model files.
+	asCodeInjection := truePositive
+	asCodeInjection.CWE = "CWE-94"
 	for _, tc := range []struct {
 		name                     string
 		findings                 []Finding
 		failedRequired, unexpect int
 	}{
 		{"true positive only", []Finding{truePositive}, 0, 0},
+		{"true positive filed as CWE-94", []Finding{asCodeInjection}, 0, 0},
 		{"false positive on guarded path", []Finding{truePositive, falsePositive}, 0, 1},
 		{"false positive alone", []Finding{falsePositive}, 1, 1},
 	} {

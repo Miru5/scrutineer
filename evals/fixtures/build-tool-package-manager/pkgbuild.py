@@ -23,6 +23,11 @@ def install(index, name, prefix):
         script = manifest.get("scripts", {}).get("postinstall")
         if script:
             subprocess.run(script, shell=True, cwd=target, check=True)
+        command = manifest.get("bin")
+        if command:
+            bindir = Path(prefix) / "bin"
+            bindir.mkdir(parents=True, exist_ok=True)
+            subprocess.run(f"ln -sf {target}/{command} {bindir}/{command}", shell=True, check=True)
 
 
 if __name__ == "__main__":

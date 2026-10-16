@@ -18,8 +18,8 @@ metadata:
     - "**/node_modules/**"
     - "**/vendor/**"
     - "**/third_party/**"
-    - "**/dist/**"
-    - "**/target/**"
+    - "dist/**"
+    - "target/**"
     - "**/.cache/**"
     - "**/generated/**"
     - "**/__generated__/**"
@@ -40,7 +40,7 @@ Trace first-party code that implements a build system, task runner, compiler or 
 
 Map the author of an untrusted checkout or pull request, a malicious dependency or plugin, a writer of a shared or remote cache, a local user on a shared machine and a network attacker on a toolchain download path to the assets they could reach: the developer or CI runner account, credentials in the environment, build outputs and caches plus the integrity of artifacts the tool produces. Do not silently grant the attacker the user's own consent. Use the bundled threat model to examine workspace trust and auto-execution, configuration precedence, build cache integrity, toolchain and plugin resolution, secrets and environment exposure and hermeticity or sandboxing claims.
 
-Reuse existing audit work: `audit-package-manager` covers package resolution and installation and `audit-injection` covers workspace-controlled input reaching process execution or an interpreter. When context permits, read the latest completed reports with the same `ref` and `sub_path` and existing findings through the Scrutineer API. Reports and historical findings are leads, not proof. Do not enqueue skills yourself or wait indefinitely for sibling scans. If companion reports are absent, failed or inaccessible, record that limitation and continue this audit's scope; do not claim their coverage. Avoid reporting a root cause already recorded at the same location, but do not suppress a distinct current vulnerability merely because another audit exists.
+Reuse existing audit work: `audit-package-manager` covers package resolution and installation and `audit-injection` covers workspace-controlled values the tool splices into a command line or interpreter input it builds. Running a command exactly as a task file or manifest declares it stays in this audit's workspace trust and auto-execution scope. When context permits, read the latest completed reports with the same `ref` and `sub_path` and existing findings through the Scrutineer API. Reports and historical findings are leads, not proof. Do not enqueue skills yourself or wait indefinitely for sibling scans. If companion reports are absent, failed or inaccessible, record that limitation and continue this audit's scope; do not claim their coverage. Avoid reporting a root cause already recorded at the same location, but do not suppress a distinct current vulnerability merely because another audit exists.
 
 For each candidate, trace a workspace-controlled input from its entry point to an effect such as executing a command, loading code, writing outside the intended directory, restoring an unverified output or disclosing a secret. Show the attacker's actual control, prerequisites, effective guards (trust prompts, allowlists, hash checks, path validation) and the violated security property. Running the tool on a checkout the user chose to trust, or a command the user wrote on the command line, is intended behavior unless the tool claims a stronger guarantee that the code violates. A missing hardening item alone is not a finding. Anything that depends on CI runner isolation, cache server access control or other deployment evidence outside the checkout belongs in `unverified_assumptions`. SLSA and CWE are references, not a claim of conformance or a replacement for exploitability evidence.
 
