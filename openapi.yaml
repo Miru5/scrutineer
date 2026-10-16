@@ -1042,6 +1042,26 @@ paths:
           description: Host header is not localhost
 
   /v1/repositories/{id}:
+    get:
+      summary: Get one repository
+      description: |
+        Returns one repository with the same shape as a line of the
+        repositories JSONL export: selected scalar columns, the latest scan
+        summary and the curated findings count. Operator token;
+        localhost-only. Not reachable with a per-scan bearer token.
+      operationId: getRepositoryExport
+      security: [{ operatorToken: [] }]
+      parameters:
+        - $ref: '#/components/parameters/RepositoryID'
+      responses:
+        '200':
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RepositoryExport' }
+        '400': { description: 'Invalid repository id, or an unsupported `format` or an `encrypt`, `scope` or `include` query value' }
+        '403': { description: Host header is not localhost }
+        '404': { description: Repository not found }
     delete:
       summary: Delete a repository and its linked data
       description: |
@@ -1193,6 +1213,28 @@ paths:
           description: Host header is not localhost
 
   /v1/findings/{id}:
+    get:
+      summary: Get one finding
+      description: |
+        Returns one finding with the same shape as a line of the findings
+        JSONL export, carrying the full set of `db.Finding` columns. Operator
+        token; localhost-only. Not reachable with a per-scan bearer token.
+      operationId: getFindingExport
+      security: [{ operatorToken: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer, format: int64 }
+      responses:
+        '200':
+          description: The finding.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FindingExport' }
+        '400': { description: 'Invalid finding id, or an unsupported `format` or an `encrypt`, `scope` or `include` query value' }
+        '403': { description: Host header is not localhost }
+        '404': { description: Finding not found }
     delete:
       summary: Delete one finding and its linked data
       description: |

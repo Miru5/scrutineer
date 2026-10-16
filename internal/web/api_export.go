@@ -26,9 +26,11 @@ const exportPrefix = "/api/v1"
 func (s *Server) exportHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("DELETE /repositories/{id}", s.apiDeleteRepository)
+	mux.HandleFunc("GET /repositories/{id}", s.apiExportRepository)
 	mux.HandleFunc("GET /repositories/{id}/findings", s.apiExportRepoFindings)
 	mux.HandleFunc("GET /repositories", s.apiExportRepositories)
 	mux.HandleFunc("DELETE /findings/{id}", s.apiDeleteFinding)
+	mux.HandleFunc("GET /findings/{id}", s.apiExportFinding)
 	mux.HandleFunc("GET /findings", s.apiExportFindings)
 	mux.HandleFunc("GET /scans", s.apiExportScans)
 	mux.HandleFunc("POST /import", s.handleImport)
@@ -155,7 +157,49 @@ func (s *Server) apiExportRepositories(w http.ResponseWriter, r *http.Request) {
 	if !validateExportFormat(w, r) {
 		return
 	}
-	q := s.DB.Table("repositories").
+	q := s.repositoryExportQuery().Order("repositories.updated_at desc")
+	streamJSONL(w, q, s.Log, repositoryExport)
+}
+
+// apiExportRepository returns one repository with the same shape as a line of
+// the repositories JSONL export.
+func (s *Server) apiExportRepository(w http.ResponseWriter, r *http.Request) {
+	if !validateExportFormat(w, r) {
+		return
+	}
+	id, ok := exportPathID(w, r, "repository")
+	if !ok {
+		return
+	}
+	var rows []repositoryExportRow
+	if err := s.repositoryExportQuery().Where("repositories.id = ?", id).Limit(1).Scan(&rows).Error; err != nil {
+		writeAPIError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(rows) == 0 {
+		writeAPIError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, repositoryExport(rows[0]))
+}
+
+// apiExportFinding returns one finding with the same shape as a line of the
+// findings JSONL export.
+func (s *Server) apiExportFinding(w http.ResponseWriter, r *http.Request) {
+	if !validateExportFormat(w, r) {
+		return
+	}
+	finding, ok := s.loadExportFindingByID(w, r)
+	if !ok {
+		return
+	}
+	writeJSON(w, http.StatusOK, findingExport(finding))
+}
+
+// repositoryExportQuery selects the repositoryExportRow projection shared by
+// the repositories export and the single-repository read.
+func (s *Server) repositoryExportQuery() *gorm.DB {
+	return s.DB.Table("repositories").
 		Select(`repositories.id,
 			repositories.url,
 			repositories.name,
@@ -178,9 +222,7 @@ func (s *Server) apiExportRepositories(w http.ResponseWriter, r *http.Request) {
 			WHERE repository_id = repositories.id
 			ORDER BY id DESC
 			LIMIT 1
-		)`).
-		Order("repositories.updated_at desc")
-	streamJSONL(w, q, s.Log, repositoryExport)
+		)`)
 }
 
 func (s *Server) apiExportRepoFindings(w http.ResponseWriter, r *http.Request) {
