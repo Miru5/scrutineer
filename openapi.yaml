@@ -1018,7 +1018,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RepositoryExport' }
-        '400': { description: Invalid repository id }
+        '400': { description: 'Invalid repository id, or an unsupported `format` or an `encrypt`, `scope` or `include` query value' }
         '403': { description: Host header is not localhost }
         '404': { description: Repository not found }
     delete:
@@ -1191,7 +1191,7 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/FindingExport' }
-        '400': { description: Invalid finding id }
+        '400': { description: 'Invalid finding id, or an unsupported `format` or an `encrypt`, `scope` or `include` query value' }
         '403': { description: Host header is not localhost }
         '404': { description: Finding not found }
     delete:

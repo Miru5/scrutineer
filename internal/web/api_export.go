@@ -164,6 +164,9 @@ func (s *Server) apiExportRepositories(w http.ResponseWriter, r *http.Request) {
 // apiExportRepository returns one repository with the same shape as a line of
 // the repositories JSONL export.
 func (s *Server) apiExportRepository(w http.ResponseWriter, r *http.Request) {
+	if !validateExportFormat(w, r) {
+		return
+	}
 	id, ok := exportPathID(w, r, "repository")
 	if !ok {
 		return
@@ -183,6 +186,9 @@ func (s *Server) apiExportRepository(w http.ResponseWriter, r *http.Request) {
 // apiExportFinding returns one finding with the same shape as a line of the
 // findings JSONL export.
 func (s *Server) apiExportFinding(w http.ResponseWriter, r *http.Request) {
+	if !validateExportFormat(w, r) {
+		return
+	}
 	finding, ok := s.loadExportFindingByID(w, r)
 	if !ok {
 		return
