@@ -863,7 +863,7 @@ func (e *FailOnThresholdError) Error() string {
 // under more than one area, so scoping the query by focus area instead is
 // not available without joining back through a scan.
 func (w *Worker) markNotObserved(scan *db.Scan, seen map[string]bool) int {
-	if scan.FocusArea != "" {
+	if scan.FocusArea != "" || scan.SkillName == "investigate" {
 		return 0
 	}
 

@@ -70,6 +70,8 @@ You can also scan a directory on disk, useful before pushing, or for code not ho
 
 The optional analysis tools (semgrep, bandit, zizmor, betterleaks, darnit, git-pkgs, brief) are bundled in the runner image, so you don't need them installed locally when the container runner is in use.
 
+To check a research lead, choose **Investigate a report** in the sidebar, enter the repository URL and paste the report. An optional branch, tag or commit selects the revision to check. This queues one focused investigation without the default scan pipeline. The scan retains the submitted text and records an assessment of each claim, with zero or more findings. Reproduced behaviour with unestablished security impact remains inconclusive; new High/Critical findings enter the existing revalidation workflow.
+
 ## Git authentication
 
 Scrutineer shells out to `git clone` with no explicit token passing, so it uses whatever credentials are already configured on the host: SSH keys, credential helpers, `gh auth login`, a `.netrc` file, or the macOS keychain.

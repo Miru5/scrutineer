@@ -50,6 +50,15 @@
 </section>
 {{end}}
 
+{{if eq .SkillName "investigate"}}
+{{with .ImportPayload}}
+<details class="border-b py-4 mb-4">
+  <summary class="cursor-pointer text-sm font-medium">Submitted report</summary>
+  <pre class="text-sm whitespace-pre-wrap break-words font-sans mt-2">{{printf "%s" .}}</pre>
+</details>
+{{end}}
+{{end}}
+
 <dl class="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-6 text-sm">
   <div>
     <dt class="text-muted-foreground">Sub-path</dt>
@@ -216,6 +225,16 @@
   </nav>
 
   <div role="tabpanel" id="p1" aria-labelledby="t1" {{if ne $default 1}}hidden{{end}}>
+    {{with $.Investigation}}
+      <p class="whitespace-pre-wrap mb-4">{{.Notes}}</p>
+      {{range .Assessments}}
+      <section class="border-b py-4 mb-4">
+        <h3 class="font-medium">{{.Claim}}</h3>
+        <p class="text-sm my-2">Outcome: {{.Outcome}}</p>
+        <p class="whitespace-pre-wrap text-sm">{{.Evidence}}</p>
+      </section>
+      {{end}}
+    {{end}}
     {{if .Findings}}
       <table class="table table-fixed w-full mb-4">
         <thead><tr>
