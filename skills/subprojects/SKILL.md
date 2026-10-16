@@ -1,6 +1,6 @@
 ---
 name: subprojects
-description: Enumerate scannable sub-folders inside a repository. Identifies monorepo packages, workspaces, and discrete modules so the analyst can scope deep-dive scans to a specific sub-path instead of treating a huge tree as one unit. Runs at repo level; writes back a list that surfaces on the repo overview.
+description: Enumerate scannable sub-folders inside a repository. Identifies monorepo packages, workspaces, and discrete modules so the analyst can scope deep-dive scans to a specific subpath instead of treating a huge tree as one unit. Runs at repo level; writes back a list that surfaces on the repo overview.
 license: MIT
 compatibility: Needs network access to the scrutineer API only for logging; the enumeration itself is filesystem-only against ./src.
 metadata:
@@ -11,12 +11,12 @@ metadata:
 
 # subprojects
 
-List the discrete scannable units inside a repository so the analyst can scope security scans to a sub-path instead of the whole tree. A repository with a single package at the root gets an empty list — that is the expected shape for the common case. A monorepo like apache/airflow or kubernetes/kubernetes gets a row per sub-package.
+List the discrete scannable units inside a repository so the analyst can scope security scans to a subpath instead of the whole tree. A repository with a single package at the root gets an empty list — that is the expected shape for the common case. A monorepo like apache/airflow or kubernetes/kubernetes gets a row per sub-package.
 
 ## Workspace
 
 - `./src` — the repository at HEAD. Read-only.
-- `./context.json` — has `scrutineer.api_base`, `scrutineer.token`, `scrutineer.repository_id`. Not finding-scoped, not sub-path-scoped (this skill *produces* sub-paths; it does not consume one).
+- `./context.json` — has `scrutineer.api_base`, `scrutineer.token`, `scrutineer.repository_id`. Not finding-scoped, not subpath-scoped (this skill *produces* subpaths; it does not consume one).
 - `./report.json` — write the enumeration here.
 - `./schema.json` — output shape.
 

@@ -41,7 +41,7 @@ func TestScanShowDisplaysScopeAndProfile(t *testing.T) {
 			if path == "" {
 				path = "root"
 			}
-			for _, want := range []string{"Sub-path", "<code>" + path + "</code>", "Runner profile", "<dd>" + tt.wantProfile + "</dd>"} {
+			for _, want := range []string{"Subpath", "<code>" + path + "</code>", "Runner profile", "<dd>" + tt.wantProfile + "</dd>"} {
 				if !strings.Contains(body, want) {
 					t.Errorf("missing %q", want)
 				}
@@ -76,7 +76,7 @@ func TestRepoScanRowsDisplaySubpathsOnRefresh(t *testing.T) {
 			t.Fatalf("%s: status %d: %s", path, w.Code, w.Body)
 		}
 		body := w.Body.String()
-		for _, want := range []string{"Sub-path: <code>packages/client</code>", "Sub-path: <code>Classes</code>"} {
+		for _, want := range []string{"Subpath: <code>packages/client</code>", "Subpath: <code>Classes</code>"} {
 			if !strings.Contains(body, want) {
 				t.Errorf("%s missing %q", path, want)
 			}

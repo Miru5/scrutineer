@@ -1,6 +1,6 @@
 ---
 name: audit-memory
-description: Focused static audit for reachable memory corruption in first-party C, C++, unsafe Rust, native extensions, and FFI boundaries.
+description: Focused static audit for reachable memory corruption in first-party C, C++, unsafe Rust, native extensions, and foreign function interface (FFI) boundaries.
 license: MIT
 compatibility: Static and read-only. Needs source in ./src, including initialized Git submodules when available. Reads bundled reference notes in ./references. Does not build, run, install dependencies, or use external network; the worker-provided Scrutineer API at api_base is allowed.
 allowed-tools: Read,Write,Bash,Grep,Glob

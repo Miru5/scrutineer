@@ -1,6 +1,6 @@
 ---
 name: compliance
-description: Audit the repository against the OpenSSF Baseline with darnit, resolve the controls darnit defers to LLM analysis or could not verify, and record per-control verdicts plus the attained Baseline level.
+description: Audit the repository against the Open Source Security Foundation (OpenSSF) Baseline with darnit, resolve the controls darnit defers to large language model (LLM) analysis or could not verify, and record per-control verdicts plus the attained Baseline level.
 license: MIT
 compatibility: Requires `darnit` (https://github.com/kusari-oss/darnit) and `python3` on PATH; the runner image ships it, the all-in-one image does not because darnit pins a tree-sitter-language-pack range with no musl wheel. Some controls shell out to `gh`, which needs a `GH_TOKEN` the scan container does not carry, so they come back `WARN` and are resolved with unauthenticated calls to api.github.com where the endpoint is public. Needs network access to api.github.com.
 allowed-tools: Read,Write,Bash
