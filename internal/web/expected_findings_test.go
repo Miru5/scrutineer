@@ -289,10 +289,13 @@ func TestBenchmarkPageRollupUsesLatestCompletedScan(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body)
 	}
 	body := w.Body.String()
-	for _, want := range []string{"bench-rollup", "50%", "1 / 2", "claude-test", "v1", "abc123456789"} {
+	for _, want := range []string{"bench-rollup", "50%", "1 / 2", "claude-test", "v1", "abc123456789", "<th>Skills SHA</th>"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("body missing %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "<th>Harness</th>") {
+		t.Fatalf("skills-repo column still labelled as the backend:\n%s", body)
 	}
 
 	w = httptest.NewRecorder()
