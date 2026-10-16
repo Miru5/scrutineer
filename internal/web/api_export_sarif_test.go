@@ -178,7 +178,7 @@ func assertRejectedSARIF(t *testing.T, rejectedRun sarif.Run) {
 }
 
 // TestExportRepoFindingsSARIF_emptyRepository pins the empty case: one run with
-// an explicit empty results array, which OSS-CRS's parser requires.
+// an explicit empty results array.
 func TestExportRepoFindingsSARIF_emptyRepository(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()

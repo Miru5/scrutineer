@@ -50,7 +50,12 @@ func (s *Server) apiExportRepoSARIF(w http.ResponseWriter, r *http.Request, repo
 		latest[v.FindingID] = v
 	}
 
-	report := buildSARIF(bundleRepositoryURL(r.Context(), repo), s.Version, findings, latest)
+	repositoryURL := bundleRepositoryURL(r.Context(), repo)
+	if repo.IsLocal() && repositoryURL == repo.URL && s.Log != nil {
+		s.Log.Warn("sarif export: local repository has no portable origin; repositoryUri carries the host path",
+			"repository_id", repo.ID)
+	}
+	report := buildSARIF(repositoryURL, s.Version, findings, latest)
 	if err := sarif.Validate(report); err != nil {
 		writeAPIError(w, http.StatusInternalServerError, err.Error())
 		return
