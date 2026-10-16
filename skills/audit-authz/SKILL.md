@@ -1,6 +1,6 @@
 ---
 name: audit-authz
-description: Focused static audit for IDOR, tenant-isolation failures, missing or fail-open authorization guards, privilege escalation, and unverified claims used for access decisions.
+description: Focused static audit for insecure direct object references (IDOR), tenant-isolation failures, missing or fail-open authorization guards, privilege escalation, and unverified claims used for access decisions.
 license: MIT
 compatibility: Static and read-only. Needs source in ./src. Reads bundled reference notes in ./references. Does not build, run, install dependencies, or use external network; the worker-provided Scrutineer API at api_base is allowed.
 allowed-tools: Read,Write,Bash,Grep,Glob
