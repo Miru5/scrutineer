@@ -22,9 +22,10 @@ import (
 const insertBatchSize = 50
 
 const (
-	findingDedupSkill = "finding-dedup"
-	verifySkillName   = "verify"
-	criticSkillName   = "critic"
+	findingDedupSkill    = "finding-dedup"
+	verifySkillName      = "verify"
+	criticSkillName      = "critic"
+	investigateSkillName = "investigate"
 )
 
 type verifyOutput struct {

@@ -55,7 +55,7 @@ func TestInvestigationWorker(t *testing.T) {
 				t.Fatal(err)
 			}
 			gdb.Create(skill)
-			prior := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, SkillName: "investigate", Status: db.ScanDone}
+			prior := db.Scan{RepositoryID: repo.ID, Kind: JobSkill, SkillName: investigateSkillName, Status: db.ScanDone}
 			gdb.Create(&prior)
 			previousFinding := db.Finding{RepositoryID: repo.ID, ScanID: prior.ID, Title: "Unrelated prior report", Status: db.FindingNew, MissedCount: 2}
 			gdb.Create(&previousFinding)
