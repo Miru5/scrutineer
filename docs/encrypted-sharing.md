@@ -241,6 +241,6 @@ No new routes. The existing endpoints gain four optional parameters:
 |----------|-----------|--------|
 | `GET /api/v1/repositories/{id}/findings` | `format=bundle` | JSON bundle instead of NDJSON |
 | `GET /api/v1/repositories/{id}/findings` | `encrypt=1` | Wrap bundle in armored age (requires `format=bundle`) |
-| `GET /api/v1/repositories/{id}/findings` | `scope=findings` | Curate the export (JSONL or bundle) to the Findings bucket, excluding scanner noise |
+| `GET /api/v1/repositories/{id}/findings` | `scope=findings` | Curate the export (JSONL, bundle or SARIF) to the Findings bucket, excluding scanner noise |
 | `GET /api/v1/repositories/{id}/findings` | `include=all` | Promote the bundle to the archival superset — enrichment, disclosure fields, and notes/communications/references — for lossless round-trip into your own instance (requires `format=bundle`) |
 | `POST /api/v1/import` | *(none)* | Auto-detects age header and decrypts before parsing |
