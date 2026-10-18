@@ -207,6 +207,16 @@
 #       - packages.ecosyste.ms:443
 #       - repos.ecosyste.ms:443
 
+# Named egress policies the operator can attach to one scan from the Run skill
+# menu on the repository page. The scan gets its skill's egress_policies grants
+# plus these. Policy names are lowercase letters, digits, '.', '_' and '-'.
+# Needs hardened: true. See docs/egress-policies.md.
+# scan_egress_policies:
+#   registries:
+#     allow:
+#       - registry.npmjs.org:443
+#       - pypi.org:443
+
 # Enrich repositories from ecosyste.ms: the per-repository cache refreshed
 # before each scan, the eager warm when a repository is added, and the PURL to
 # repository resolution behind SBOM and dependency import. false stops every

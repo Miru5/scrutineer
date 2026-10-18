@@ -239,6 +239,7 @@ func (w *Worker) doSkill(ctx context.Context, scan *db.Scan, emit func(Event)) (
 		AllowedTools:    skill.AllowedTools,
 		SrcReady:        true,
 		Profile:         scan.Profile,
+		EgressPolicy:    scan.EgressPolicy,
 		RequiresProfile: skill.RequiresProfile,
 	}
 	w.applyResume(scan, &sj, emit)

@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -200,7 +201,14 @@ func (s *Server) skillRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "skill not found or inactive", http.StatusNotFound)
 		return
 	}
-	scanID, err := s.enqueueSkill(r.Context(), uint(repoID), uint(skillID), r.FormValue("model"))
+	scanID, err := s.enqueueSkillWith(r.Context(), uint(repoID), uint(skillID), ScanOpts{
+		Model:        r.FormValue("model"),
+		EgressPolicy: strings.TrimSpace(r.FormValue("egress_policy")),
+	})
+	if errors.Is(err, ErrUnknownEgressPolicy) {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

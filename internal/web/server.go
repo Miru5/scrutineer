@@ -76,6 +76,12 @@ var ErrInvalidRef = errors.New("invalid git ref")
 // API layer maps it to a 400 instead of reporting an internal server failure.
 var ErrInvalidRescanMode = errors.New("invalid rescan mode")
 
+// ErrUnknownEgressPolicy is returned by enqueueSkillWith when opts.EgressPolicy
+// names no configured scan_egress_policies entry. The browser handlers map it
+// to a 422 so a stale form or a retry after the policy was removed fails
+// loudly instead of running without the egress the operator asked for.
+var ErrUnknownEgressPolicy = errors.New("unknown scan egress policy")
+
 //go:embed templates/*.html
 var tmplFS embed.FS
 
@@ -95,6 +101,11 @@ type Server struct {
 	// browser checks: securityHeaders rejects the host.docker.internal Host
 	// every container request carries.
 	ModelProxy *worker.ModelProxy
+
+	// ScanEgressPolicies are the sorted scan_egress_policies names the
+	// operator may attach to a scan from the repository page. Empty hides the
+	// picker and makes enqueueSkillWith refuse any policy name.
+	ScanEgressPolicies []string
 
 	// OperatorToken is the credential the browser UI and /api/v1 require on
 	// top of the loopback Host check. Empty refuses every such request.
@@ -2504,6 +2515,8 @@ type repoShowView struct {
 	// GlobalScanSchedule is the settings-level default schedule, shown on
 	// the repo page so "inherit" spells out what it inherits.
 	GlobalScanSchedule string
+	// ScanEgressPolicies feeds the Run skill form's egress policy picker.
+	ScanEgressPolicies []string
 }
 
 func (s *Server) loadRepoShowView(
@@ -2561,6 +2574,7 @@ func (s *Server) loadRepoShowView(
 		PausedScans:        int(pausedScans),
 		TotalCost:          repoTotalCost(s.DB, repo.ID),
 		GlobalScanSchedule: globalSchedule,
+		ScanEgressPolicies: s.ScanEgressPolicies,
 	}
 }
 
@@ -2615,6 +2629,7 @@ func (v repoShowView) renderData() map[string]any {
 		"Uncategorized":      UncategorizedCWE,
 		"TabRowCap":          int64(tabRowCap),
 		"GlobalScanSchedule": v.GlobalScanSchedule,
+		"ScanEgressPolicies": v.ScanEgressPolicies,
 	}
 }
 
@@ -3399,6 +3414,10 @@ type ScanOpts struct {
 	ScopeMode string
 	Ref       string
 	Profile   string
+	// EgressPolicy names a scan_egress_policies entry. It is operator-only:
+	// only the repository page form and the operator retry paths fill it.
+	// It must never be filled from the skill API or a follow-up hook.
+	EgressPolicy string
 	// RescanMode requests full or diff coverage. Empty preserves the existing
 	// full-scan behavior. A requested diff scan can fall back to full coverage
 	// once the worker resolves the clone and baseline.
@@ -3431,10 +3450,6 @@ type ScanOpts struct {
 	// ImportPayload is an ingest report or a retained reflection snapshot;
 	// the worker stages it at import/report. Empty for other enqueues.
 	ImportPayload []byte
-}
-
-func (s *Server) enqueueSkill(ctx context.Context, repoID, skillID uint, model string) (uint, error) {
-	return s.enqueueSkillWith(ctx, repoID, skillID, ScanOpts{Model: model})
 }
 
 // enqueueSkillScoped is a thin shim preserved for call sites that already
@@ -3503,6 +3518,9 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 	if err := worker.ValidateGitRef(opts.Ref); err != nil {
 		return 0, fmt.Errorf("%w: %v", ErrInvalidRef, err)
 	}
+	if opts.EgressPolicy != "" && !slices.Contains(s.ScanEgressPolicies, opts.EgressPolicy) {
+		return 0, fmt.Errorf("%w: %q", ErrUnknownEgressPolicy, opts.EgressPolicy)
+	}
 	if strings.TrimSpace(opts.FocusArea) != "" {
 		area, err := repoconfig.DecodeFocusAreaJSON(opts.FocusArea)
 		if err != nil {
@@ -3562,6 +3580,7 @@ func (s *Server) enqueueSkillWith(ctx context.Context, repoID, skillID uint, opt
 		RescanMode:           opts.RescanMode,
 		DiffBaseScanID:       opts.DiffBaseScanID,
 		Profile:              opts.Profile,
+		EgressPolicy:         opts.EgressPolicy,
 		SessionID:            opts.SessionID,
 		ResumedFromScanID:    opts.ResumedFromScanID,
 		ParentScanID:         opts.ParentScanID,

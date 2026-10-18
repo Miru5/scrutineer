@@ -399,3 +399,141 @@ func TestPrepareExecution_modelProxyAndPolicyTogether(t *testing.T) {
 		t.Error("policy's scoped proxy still listening after cleanup")
 	}
 }
+
+func scanPolicyTestRunner(hardened bool) ContainerRunner {
+	d := policyTestRunner(hardened, map[string][]EgressGrant{"meta": {{Host: "a.example.com", Ports: []string{"443"}}}})
+	d.ScanEgressPolicies = map[string][]EgressGrant{"net": {{Host: "a.example.com", Ports: []string{"8443"}}, {Host: "b.example.com", Ports: []string{"443"}}}}
+	return d
+}
+
+func TestApplyEgressPolicy_scanPolicyMergesOnSidecar(t *testing.T) {
+	d := scanPolicyTestRunner(true)
+	d.Runtime = ContainerRuntime{Bin: "docker", DockerDesktop: true, Version: "24.0.7"}
+	emit, events := collectEvents()
+	got, cleanup, err := d.applyEgressPolicy(SkillJob{Name: "meta", EgressPolicy: "net"}, emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	want := []EgressGrant{{Host: "a.example.com", Ports: []string{"443", "8443"}}, {Host: "b.example.com", Ports: []string{"443"}}}
+	if !reflect.DeepEqual(got.Egress.Grants, want) {
+		t.Errorf("sidecar grants = %+v, want %+v", got.Egress.Grants, want)
+	}
+	if len(d.Egress.Grants) != 0 {
+		t.Error("shared runner config was mutated")
+	}
+	ev := events()
+	text := "egress-policy: skill=meta scan_policy=net grants=a.example.com:443|8443,b.example.com:443"
+	if len(ev) != 1 || ev[0].Kind != KindEgress || ev[0].Text != text {
+		t.Errorf("events = %+v, want %q", ev, text)
+	}
+}
+
+func TestApplyEgressPolicy_scanPolicyOnlyOnSidecar(t *testing.T) {
+	d := scanPolicyTestRunner(true)
+	d.Runtime = ContainerRuntime{Bin: "docker", DockerDesktop: true, Version: "24.0.7"}
+	emit, events := collectEvents()
+	got, _, err := d.applyEgressPolicy(SkillJob{Name: "plain", EgressPolicy: "net"}, emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if egressgrant.Format(got.Egress.Grants) != "a.example.com:8443,b.example.com:443" {
+		t.Errorf("grants = %+v", got.Egress.Grants)
+	}
+	if ev := events(); len(ev) != 1 || !strings.Contains(ev[0].Text, "skill=plain scan_policy=net") {
+		t.Errorf("events = %+v", ev)
+	}
+}
+
+func TestApplyEgressPolicy_scanPolicyHostProxyMergesGrants(t *testing.T) {
+	d := scanPolicyTestRunner(true)
+	emit, events := collectEvents()
+	got, cleanup, err := d.applyEgressPolicy(SkillJob{Name: "meta", EgressPolicy: "net"}, emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userinfo, hostport, _ := strings.Cut(strings.TrimPrefix(got.ProxyURL, "http://"), "@")
+	_, pw, _ := strings.Cut(userinfo, ":")
+	_, port, _ := strings.Cut(hostport, ":")
+	// Undeclared ports on a host only the skill grants and on a host only the
+	// scan grants both reach the port gate, which proves one proxy serves both.
+	for _, target := range []string{"a.example.com:22", "b.example.com:22"} {
+		if code := connectStatus(t, "127.0.0.1:"+port, target, pw); code != http.StatusForbidden {
+			t.Fatalf("CONNECT %s = %d, want 403", target, code)
+		}
+	}
+	cleanup()
+	var denials int
+	for _, e := range events() {
+		if strings.HasPrefix(e.Text, "egress-proxy: ") && strings.Contains(e.Text, "port not granted") {
+			denials++
+		}
+	}
+	if denials != 2 {
+		t.Errorf("port-gate denials = %d, want 2: %+v", denials, events())
+	}
+}
+
+func TestApplyEgressPolicy_unknownScanPolicyRefused(t *testing.T) {
+	for _, d := range []ContainerRunner{scanPolicyTestRunner(true), policyTestRunner(true, nil)} {
+		emit, events := collectEvents()
+		_, _, err := d.applyEgressPolicy(SkillJob{Name: "plain", EgressPolicy: "gone"}, emit)
+		if err == nil || !strings.Contains(err.Error(), `scan egress policy "gone" is not configured`) {
+			t.Fatalf("err = %v, want an unconfigured policy refusal", err)
+		}
+		if len(events()) != 0 {
+			t.Errorf("refused scan emitted events: %+v", events())
+		}
+	}
+}
+
+func TestApplyEgressPolicy_scanPolicyRefusesWithoutHardened(t *testing.T) {
+	d := scanPolicyTestRunner(false)
+	emit, _ := collectEvents()
+	_, _, err := d.applyEgressPolicy(SkillJob{Name: "plain", EgressPolicy: "net"}, emit)
+	if err == nil || !strings.Contains(err.Error(), "requires --hardened") || !strings.Contains(err.Error(), `scan policy "net"`) {
+		t.Fatalf("err = %v, want a --hardened refusal naming the scan policy", err)
+	}
+}
+
+func TestApplyEgressPolicy_scanPolicyHostProxyNeedsContainerHost(t *testing.T) {
+	d := scanPolicyTestRunner(true)
+	d.ProviderProxy.ContainerHost = ""
+	emit, _ := collectEvents()
+	_, _, err := d.applyEgressPolicy(SkillJob{Name: "plain", EgressPolicy: "net"}, emit)
+	if err == nil || !strings.Contains(err.Error(), `scan policy "net"`) {
+		t.Fatalf("err = %v, want a scoped proxy error naming the scan policy", err)
+	}
+}
+
+func TestApplyEgressPolicy_scanPolicyDoesNotTouchOtherScans(t *testing.T) {
+	d := scanPolicyTestRunner(true)
+	d.ProxyURL = "http://x"
+	emit, events := collectEvents()
+	got, cleanup, err := d.applyEgressPolicy(SkillJob{Name: "plain"}, emit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup()
+	if !reflect.DeepEqual(got, d) || len(events()) != 0 {
+		t.Errorf("scan without a policy changed the runner or emitted events: %+v %v", got, events())
+	}
+}
+
+func TestHasEgressPolicy(t *testing.T) {
+	d := scanPolicyTestRunner(true)
+	for _, tc := range []struct {
+		name string
+		sj   SkillJob
+		want bool
+	}{
+		{"neither", SkillJob{Name: "plain"}, false},
+		{"skill policy", SkillJob{Name: "meta"}, true},
+		{"scan policy", SkillJob{Name: "plain", EgressPolicy: "net"}, true},
+		{"unconfigured scan policy still counts so it is refused", SkillJob{Name: "plain", EgressPolicy: "gone"}, true},
+	} {
+		if got := d.hasEgressPolicy(tc.sj); got != tc.want {
+			t.Errorf("%s: hasEgressPolicy = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

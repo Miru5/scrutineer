@@ -638,3 +638,49 @@ func TestLoad_rejectsInvalidEgressPolicies(t *testing.T) {
 		})
 	}
 }
+
+func TestLoad_parsesScanEgressPolicies(t *testing.T) {
+	c, err := Load(write(t, `
+scan_egress_policies:
+  registries:
+    allow:
+      - registry.npmjs.org:443
+      - "*.pythonhosted.org:443"
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := c.ScanEgressPolicies["registries"].Allow
+	if len(got) != 2 || got[0] != "registry.npmjs.org:443" {
+		t.Errorf("scan_egress_policies.registries.allow = %v", got)
+	}
+}
+
+func TestLoad_rejectsInvalidScanEgressPolicies(t *testing.T) {
+	policy := func(name, e string) string {
+		return "scan_egress_policies:\n  " + name + ":\n    allow: ['" + e + "']\n"
+	}
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want string
+	}{
+		{"empty allow", "scan_egress_policies:\n  net:\n    allow: []\n", "at least one"},
+		{"uppercase name", policy("Net", "a.example.com:443"), "policy name"},
+		{"space in name", policy("'my net'", "a.example.com:443"), "policy name"},
+		{"empty name", policy("''", "a.example.com:443"), "policy name"},
+		{"name too long", policy(strings.Repeat("a", 65), "a.example.com:443"), "policy name"},
+		{"ip literal", policy("net", "10.0.0.1:443"), "IP"},
+		{"missing port", policy("net", "a.example.com"), "host:port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Load(write(t, tc.yaml))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Load error = %v, want text %q", err, tc.want)
+			}
+			if !strings.Contains(err.Error(), "scan_egress_policies") {
+				t.Errorf("error %q lacks the scan_egress_policies key", err)
+			}
+		})
+	}
+}

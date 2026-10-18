@@ -91,6 +91,10 @@ type ContainerRunner struct {
 	// EgressPolicies are the per-skill egress grants, keyed by skill name.
 	// They come from operator config only and apply under --hardened.
 	EgressPolicies map[string][]EgressGrant
+	// ScanEgressPolicies are the named per-scan egress grants an operator can
+	// attach to one scan, keyed by policy name. SkillJob.EgressPolicy selects
+	// one and its grants are added to the skill's own.
+	ScanEgressPolicies map[string][]EgressGrant
 	// OpencodeProviders contains provider-scoped images, credentials, state,
 	// config, and egress resolved from the operator's YAML configuration.
 	OpencodeProviders map[string]OpencodeProviderConfig
@@ -294,7 +298,7 @@ func (d ContainerRunner) prepareExecution(ctx context.Context, sj SkillJob, emit
 	noop := func() {}
 	// With an egress policy, applyEgressPolicy starts the single scoped proxy,
 	// so the OpenCode step only widens the allowlists.
-	d, provider, result, cleanupProviderProxy, err := d.prepareOpencodeExecution(ctx, sj.Model, len(d.EgressPolicies[sj.Name]) > 0)
+	d, provider, result, cleanupProviderProxy, err := d.prepareOpencodeExecution(ctx, sj.Model, d.hasEgressPolicy(sj))
 	if err != nil {
 		return d, provider, result, noop, err
 	}
