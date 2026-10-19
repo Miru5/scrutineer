@@ -96,3 +96,46 @@ func TestCopyFocusFilesRejectsEscapingSource(t *testing.T) {
 		t.Fatal("copied source outside the workspace")
 	}
 }
+
+func TestRunSkillRejectsUnmetRequiredProfile(t *testing.T) {
+	runner := ContainerRunner{Harness: dockerNoopHarness{}}
+	work := t.TempDir()
+	if err := os.Mkdir(filepath.Join(work, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.RunSkill(t.Context(), SkillJob{WorkRoot: work, SrcReady: true, Name: "probe", RequiresProfile: "php"}, func(Event) {})
+	if err == nil || !strings.Contains(err.Error(), `requires profile "php", resolved "default"`) {
+		t.Fatalf("error = %v", err)
+	}
+	if result.Profile != "" {
+		t.Fatalf("profile = %q", result.Profile)
+	}
+}
+
+func TestCopyFocusFilesLinksWithinWorkspace(t *testing.T) {
+	work := t.TempDir()
+	src, dst := filepath.Join(work, "src"), filepath.Join(work, "profile-focus-view")
+	if err := os.MkdirAll(filepath.Join(src, "app"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "app/main.js"), []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(dst, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFocusFiles(t.Context(), src, dst, "", []string{"app/**"}); err != nil {
+		t.Fatal(err)
+	}
+	orig, err := os.Stat(filepath.Join(src, "app/main.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	linked, err := os.Stat(filepath.Join(dst, "app/main.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(orig, linked) {
+		t.Fatal("focus view holds a copy, want a hard link")
+	}
+}

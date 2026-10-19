@@ -32,6 +32,13 @@ func (d ContainerRunner) resolveSkillProfile(ctx context.Context, job SkillJob, 
 		}
 	}
 	profile, image := d.resolveProfile(ctx, requested, src, job.SubPath, emit)
+	if job.RequiresProfile != "" && profile != job.RequiresProfile {
+		got := profile
+		if got == "" {
+			got = "default"
+		}
+		return profile, image, fmt.Errorf("skill %q requires profile %q, resolved %q", job.Name, job.RequiresProfile, got)
+	}
 	return profile, image, nil
 }
 
@@ -90,6 +97,11 @@ func copyFocusFiles(ctx context.Context, src, dst, subPath string, paths []strin
 		return err
 	}
 	defer func() { _ = root.Close() }()
+	// A view beside src in the workspace can hard-link instead of copying.
+	view, err := filepath.Rel(filepath.Dir(src), dst)
+	if err != nil || !filepath.IsLocal(view) {
+		view = ""
+	}
 	return fs.WalkDir(root.FS(), ".", func(rel string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -109,8 +121,18 @@ func copyFocusFiles(ctx context.Context, src, dst, subPath string, paths []strin
 		if clean != "" && !strings.HasPrefix(rel, clean+"/") {
 			return nil
 		}
+		if view != "" && linkFocusFile(workspace, filepath.Join(filepath.Base(src), filepath.FromSlash(rel)), filepath.Join(view, filepath.FromSlash(rel))) == nil {
+			return nil
+		}
 		return copyFocusFile(root, rel, filepath.Join(dst, filepath.FromSlash(rel)))
 	})
+}
+
+func linkFocusFile(workspace *os.Root, oldname, newname string) error {
+	if err := workspace.MkdirAll(filepath.Dir(newname), dirPerm); err != nil {
+		return err
+	}
+	return workspace.Link(oldname, newname)
 }
 
 func copyFocusFile(root *os.Root, rel, dst string) error {

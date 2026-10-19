@@ -352,16 +352,9 @@ func (d ContainerRunner) RunSkill(ctx context.Context, sj SkillJob, emit func(Ev
 	absWork, _ := filepath.Abs(work)
 
 	profile, image, err := d.resolveSkillProfile(ctx, sj, src, emit)
+	result.Profile = profile
 	if err != nil {
 		return result, err
-	}
-	result.Profile = profile
-	if sj.RequiresProfile != "" && profile != sj.RequiresProfile {
-		got := profile
-		if got == "" {
-			got = "default"
-		}
-		return result, fmt.Errorf("skill %q requires profile %q, resolved %q", sj.Name, sj.RequiresProfile, got)
 	}
 	d.injectProfileGuide(profile, absWork, emit)
 
