@@ -20,12 +20,14 @@ func TestBundledFileParserAuditMetadata(t *testing.T) {
 	// Parsers keep real source under directories named build, out, dist or
 	// target, such as Go's src/cmd/dist and Rust crates' src/target modules,
 	// so only root-level dist and target output is excluded.
-	for _, path := range []string{"tlvdoc/reader.py", "src/decode.c", "lib/xml/parser.go", "internal/build/x.go", "cmd/out/main.go", "src/cmd/dist/x.go", "app/src/target/y.rs"} {
+	// Generated parsers from bison, ragel, ANTLR or Kaitai read hostile bytes,
+	// so generated paths stay included.
+	for _, path := range []string{"tlvdoc/reader.py", "src/decode.c", "lib/xml/parser.go", "internal/build/x.go", "cmd/out/main.go", "src/cmd/dist/x.go", "app/src/target/y.rs", "generated/parser.c", "src/__generated__/Lexer.java"} {
 		if !PathIncluded(path, skill.Paths, skill.IgnorePaths) {
 			t.Errorf("excluded %s", path)
 		}
 	}
-	for _, path := range []string{"node_modules/lib/index.js", "vendor/dep/dep.go", "third_party/lib/a.c", "dist/parser.js", "target/debug/parser", ".cache/entry", "generated/schema.go", "parser.min.js"} {
+	for _, path := range []string{"node_modules/lib/index.js", "vendor/dep/dep.go", "third_party/lib/a.c", "dist/parser.js", "target/debug/parser", ".cache/entry", "parser.min.js"} {
 		if PathIncluded(path, skill.Paths, skill.IgnorePaths) {
 			t.Errorf("included %s", path)
 		}
@@ -35,7 +37,7 @@ func TestBundledFileParserAuditMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Findings persist these links as references, so each must name a
-	// versioned CWE definition page and nothing else on the CWE site.
+	// CWE definition page and nothing else on the CWE site.
 	definition := regexp.MustCompile(`^https://cwe\.mitre\.org/data/definitions/[0-9]+\.html$`)
 	links := regexp.MustCompile(`https?://cwe\.mitre\.org[^\s)\]]*`).FindAllString(string(ref), -1)
 	if len(links) == 0 {

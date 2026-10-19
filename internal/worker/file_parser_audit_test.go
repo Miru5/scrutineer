@@ -13,8 +13,7 @@ func TestFileParserAuditSchemaAndIngestion(t *testing.T) {
 	if detail := ValidateReportSchema(loadBundledSchema(t, "../../skills/audit-file-parser/schema.json"), report); detail != "" {
 		t.Fatal(detail)
 	}
-	// The ingestion helper is shared with the build tooling audit tests.
-	findings, refs := ingestBuildToolingReport(t, report)
+	findings, refs := ingestModeAuditReport(t, report)
 	if len(findings) != 1 || findings[0].CWE != "CWE-409" || findings[0].Location != "tlvdoc/reader.py:42" {
 		t.Fatalf("findings=%+v", findings)
 	}

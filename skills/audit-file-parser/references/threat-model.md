@@ -2,7 +2,7 @@
 
 ## Reference and limits
 
-This is original, source-review guidance informed by the MITRE Common Weakness Enumeration (CWE), not a reproduction of the catalog or a certification of any kind. Use the linked CWE definitions and identifiers as references. Applicability depends on what the project actually implements. Source review cannot establish the memory limits, timeouts, request size caps or sandboxing a deploying application applies around the parser without additional evidence.
+This is original, source-review guidance informed by the MITRE Common Weakness Enumeration (CWE), not a reproduction of the catalog or a certification of any kind. Use the linked CWE definitions and identifiers as references. Applicability depends on what the project actually implements. Source review cannot establish the memory limits, timeouts, request size caps or sandboxing a deploying application applies around the parser without additional evidence. Protocol message parsers that decode received bytes are in scope for the sections below, but checking their conformance to the protocol specification is not.
 
 ## Actors and assets
 

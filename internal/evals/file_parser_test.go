@@ -5,6 +5,7 @@ package evals
 import (
 	"encoding/json"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -84,6 +85,28 @@ with tempfile.TemporaryDirectory() as tmp:
         example['main']()
     assert out.getvalue().splitlines()[0] == 'Quarterly report'
 
+# The protocol library decodes a DNS query and refuses pointer loops.
+sys.path.insert(0, str(fixtures / 'file-parser-protocol'))
+from dnswire import parse_message
+query = struct.pack('>HHHHHH', 0x1234, 0x0100, 1, 0, 0, 0) + b'\x03www\x07example\x03com\x00' + struct.pack('>HH', 1, 1)
+msg = parse_message(query)
+assert msg.questions[0].name == 'www.example.com'
+assert msg.questions[0].qtype == 1
+loop = struct.pack('>HHHHHH', 1, 0, 1, 0, 0, 0) + b'\xc0\x0c' + struct.pack('>HH', 1, 1)
+try:
+    parse_message(loop)
+except ValueError:
+    pass
+else:
+    raise AssertionError('pointer loop accepted')
+
+# The upload service parses a record file and answers health checks.
+sys.path.insert(0, str(fixtures / 'file-parser-upload'))
+upload = runpy.run_path(str(fixtures / 'file-parser-upload' / 'server.py'))
+status, result = upload['dispatch']('POST', '/import', {}, b'\x00\x03abc\x00\x02de')
+assert status == 200 and result['records'] == 2, (status, result)
+assert upload['dispatch']('GET', '/health', {}, b'')[0] == 200
+
 # The native decoder is shipped as source for the overlap case.
 assert (fixtures / 'file-parser-native' / 'src' / 'decode.c').exists()
 `
@@ -111,6 +134,7 @@ func TestFileParserAuditLive(t *testing.T) {
 type fileParserModeCase struct {
 	name, fixture, subPath string
 	parser, memory, skip   bool
+	web                    bool
 }
 
 func TestFileParserTriageLive(t *testing.T) {
@@ -121,6 +145,8 @@ func TestFileParserTriageLive(t *testing.T) {
 		{name: "scoped format library", fixture: "file-parser-format", subPath: "tlvdoc", parser: true},
 		{name: "scoped consumer of the format library", fixture: "file-parser-format", subPath: "examples"},
 		{name: "native decoder", fixture: "file-parser-native", parser: true, memory: true},
+		{name: "protocol message parser", fixture: "file-parser-protocol", parser: true},
+		{name: "web upload service", fixture: "file-parser-upload", parser: true, web: true},
 		{name: "active audit", fixture: "file-parser-format", parser: true, skip: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) { runFileParserModeCase(t, tc) })
@@ -132,15 +158,21 @@ func runFileParserModeCase(t *testing.T, tc fileParserModeCase) {
 	counts, report := runTriageModeCase(t, triageScan{fixture: tc.fixture, subPath: tc.subPath, activeSkill: "audit-file-parser", activeHere: tc.skip})
 	// Extracting archive entries stays with audit-file-parser. None of the
 	// fixtures resolve external references or deserialize into arbitrary types.
-	wants := map[string]bool{"audit-file-parser": tc.parser && !tc.skip, "audit-memory": tc.memory, "audit-exfil": false, "audit-injection": false, "audit-web": false, "audit-embedded": false, "audit-build-tooling": false, "threat-model": true}
+	wants := map[string]bool{"audit-file-parser": tc.parser && !tc.skip, "audit-memory": tc.memory, "audit-exfil": false, "audit-injection": false, "audit-web": tc.web, "audit-embedded": false, "audit-build-tooling": false, "threat-model": true}
 	for skill, want := range wants {
 		if got := counts["/api/repositories/1/skills/"+skill+"/run"] > 0; got != want {
 			t.Errorf("%s enqueued=%t want=%t; report=%s", skill, got, want, report)
 		}
 	}
+	// Shared audits are enqueued once.
+	for path, n := range counts {
+		if strings.HasPrefix(path, "/api/repositories/1/skills/") && strings.HasSuffix(path, "/run") && n > 1 {
+			t.Errorf("%s requested %d times", path, n)
+		}
+	}
 	modes := triageReportModes(t, report)
-	if modes["file-parser"] != tc.parser {
-		t.Fatalf("modes=%v want file-parser=%t", modes, tc.parser)
+	if modes["file-parser"] != tc.parser || modes["web-api"] != tc.web {
+		t.Fatalf("modes=%v want file-parser=%t web-api=%t", modes, tc.parser, tc.web)
 	}
 }
 

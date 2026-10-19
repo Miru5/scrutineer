@@ -12,9 +12,9 @@ func buildToolingAuditReport(findings string) string {
 	return `{"review_status":"reviewed","findings":[` + findings + `],"notes":"Static source review only.","scope":"Task runner.","source_sink_inventory":["taskrun/plugins.py:11 executes workspace plugin modules when a task runs."],"negative_results":["taskrun/cache.py:12 validates the digest and keeps restored paths inside the workspace."],"unverified_assumptions":["CI runner isolation was not available in the checkout."],"design_properties":["taskrun/cli.py:12 runs the argv list of the task the user named."]}`
 }
 
-// ingestBuildToolingReport ingests a report through the findings path and
+// ingestModeAuditReport ingests a report through the findings path and
 // returns the stored findings with their references.
-func ingestBuildToolingReport(t *testing.T, report string) ([]db.Finding, []db.FindingReference) {
+func ingestModeAuditReport(t *testing.T, report string) ([]db.Finding, []db.FindingReference) {
 	t.Helper()
 	repo, gdb := runSkillWithReport(t, "findings", report)
 	var findings []db.Finding
@@ -37,7 +37,7 @@ func TestBuildToolingAuditSchemaAndIngestion(t *testing.T) {
 	if detail := ValidateReportSchema(loadBundledSchema(t, "../../skills/audit-build-tooling/schema.json"), report); detail != "" {
 		t.Fatal(detail)
 	}
-	findings, refs := ingestBuildToolingReport(t, report)
+	findings, refs := ingestModeAuditReport(t, report)
 	if len(findings) != 1 || findings[0].CWE != "CWE-829" {
 		t.Fatalf("findings=%+v", findings)
 	}

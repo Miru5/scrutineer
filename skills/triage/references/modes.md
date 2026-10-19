@@ -11,6 +11,16 @@ component elsewhere in the monorepo does not activate a mode for this scan.
 Record source paths relative to `./src`, with the behavior that supports each
 match. Uncertain matches stay gated and get an explanation in `errors`.
 
+## Combining modes
+
+Companion audits are ordinary existing skills, not copies of their
+checklists. Gate a companion audit when its source-based applicability is
+absent. Union all matching modes' skills with the normal scan set before
+enqueueing. Each skill is requested at most once and uses the same
+ref/subpath. Each also obeys the existing active/completed skip set. An
+inactive companion audit is recorded as skipped, not replaced with a second
+broad scan.
+
 ## package-manager
 
 Enqueue `audit-package-manager` when first-party code implements package
@@ -54,12 +64,7 @@ Enqueue `audit-web` for a match. Also add `audit-authz` when the scoped
 application implements principal, ownership, role or tenant checks or
 protected resources. Add `audit-injection` when request-derived input reaches
 query construction, process execution, template evaluation or another
-interpreter. These are ordinary existing skills, not copies of their
-checklists. Gate a companion audit when its source-based applicability is
-absent. Union all matching modes' skills with the normal scan set before
-enqueueing: each skill is requested at most once, uses the same ref/subpath,
-and obeys the existing active/completed skip set. An inactive companion audit
-is recorded as skipped, not replaced with a second broad scan.
+interpreter.
 
 ## embedded-iot
 
@@ -79,13 +84,7 @@ subproject. Keep uncertain classifications gated and record the missing
 evidence.
 
 Enqueue `audit-embedded` for a match. Also add `audit-memory` when the scoped
-firmware includes first-party C, C++ or unsafe Rust. These are ordinary
-existing skills, not copies of their checklists. Gate a companion audit when
-its source-based applicability is absent. Union all matching modes' skills
-with the normal scan set before enqueueing: each skill is requested at most
-once and uses the same ref/subpath. Each also obeys the existing
-active/completed skip set. An inactive companion audit is recorded as
-skipped, not replaced with a second broad scan.
+firmware includes first-party C, C++ or unsafe Rust.
 
 ## build-tooling
 
@@ -112,13 +111,7 @@ tool itself splices workspace-controlled values into a command line, shell
 string, template or interpreter input that it builds. Running a command or
 argv list exactly as a task file or manifest declares it is the tool's own
 behavior. `audit-build-tooling` covers it, so it does not add
-`audit-injection` on that evidence alone. These are ordinary existing skills,
-not copies of their checklists. Gate a companion audit when its source-based
-applicability is absent. Union all matching modes' skills with the normal scan
-set before enqueueing: each skill is requested at most once and uses the same
-ref/subpath. Each also obeys the existing active/completed skip set. An
-inactive companion audit is recorded as skipped, not replaced with a second
-broad scan.
+`audit-injection` on that evidence alone.
 
 ## file-parser
 
@@ -128,14 +121,20 @@ format: archives and compression, images, media, documents, fonts,
 serialization and markup formats such as XML, YAML and JSON variants,
 configuration formats or binary container formats. Trace a public API, CLI
 command or processing entry point into the code that interprets the bytes of
-input it does not control. A web service that parses uploads may match this
-mode alongside `web-api`.
+input it does not control. First-party code that decodes a network protocol's
+messages from bytes it receives, such as HTTP messages, DNS messages or TLS
+records, also matches. A web service that parses uploads may match this mode
+alongside `web-api`. A package manager that unpacks registry archives may match
+this mode alongside `package-manager`. When both match, `audit-package-manager`
+owns extracting package archives into the install tree (member paths, links and
+expanded size) and `audit-file-parser` covers the package manager's other
+first-party format code.
 
 A project that merely calls a parser library on its own bundled or trusted
 files, depends on a format library, or ships sample files, test corpora or
 fuzz seeds does not qualify on that evidence alone. Neither do keywords such
 as "parse" or "format", documentation or test-only harnesses. Checking a
-network protocol parser against its RFC is out of scope for this mode. Trace
+protocol parser's conformance to its RFC is out of scope for this mode. Trace
 the parser in the current scan scope; do not borrow one from another monorepo
 subproject. A scan scoped to a subpath that only calls the parser, such as an
 examples directory, does not match even when the parent project does. Keep
@@ -147,10 +146,4 @@ Add `audit-exfil` only when the parser itself resolves external entities,
 includes or URLs named by the input. Add `audit-injection` only when it
 deserializes input into arbitrary types or evaluates it. Extracting archive
 entries to disk does not add `audit-exfil` on that evidence alone because
-`audit-file-parser` covers it. These are ordinary existing skills, not copies
-of their checklists. Gate a companion audit when its source-based
-applicability is absent. Union all matching modes' skills with the normal scan
-set before enqueueing: each skill is requested at most once and uses the same
-ref/subpath. Each also obeys the existing active/completed skip set. An
-inactive companion audit is recorded as skipped, not replaced with a second
-broad scan.
+`audit-file-parser` covers it.
