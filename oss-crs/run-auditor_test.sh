@@ -100,6 +100,20 @@ run env OSS_CRS_TARGET_SOURCE="$TEST_DIR/source" FAKE_STATUS=1
 assert_eq 1 "$status" 'failure: exit status'
 assert_eq '' "$(cat "$TEST_DIR/libcrs.calls")" 'failure: submits nothing'
 
+# A root start without the audit user refuses to run the audit as root. The
+# fake id reports uid 0 and knows no other user.
+mkdir -p "$TEST_DIR/rootbin"
+cat > "$TEST_DIR/rootbin/id" <<'FAKE'
+#!/usr/bin/env bash
+[ "${1:-}" = -u ] && { echo 0; exit 0; }
+exit 1
+FAKE
+chmod +x "$TEST_DIR/rootbin/id"
+run env PATH="$TEST_DIR/rootbin:$PATH" OSS_CRS_TARGET_SOURCE="$TEST_DIR/source" SCRUTINEER_AUDIT_USER=nobody-here
+assert_eq 2 "$status" 'root without audit user: exit status'
+assert_eq absent "$([ -e "$TEST_DIR/scrutineer.argv" ] && echo present || echo absent)" 'root without audit user: scrutineer not called'
+assert_eq '' "$(cat "$TEST_DIR/libcrs.calls")" 'root without audit user: submits nothing'
+
 for attempt in first second; do
   run env OSS_CRS_TARGET_SOURCE="$TEST_DIR/source" OSS_CRS_LOG_DIR="$TEST_DIR/crs-logs"
   assert_eq 0 "$status" "log dir ($attempt run): exit status"

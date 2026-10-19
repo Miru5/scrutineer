@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -114,11 +116,10 @@ func readManifest(t *testing.T, outDir string) auditManifest {
 }
 
 func exitCodeOf(err error) int {
-	var coded interface{ ExitCode() int }
-	if errors.As(err, &coded) {
-		return coded.ExitCode()
+	if err == nil {
+		return 0
 	}
-	return -1
+	return exitCodeFor(err)
 }
 
 func countLines(t *testing.T, path string) int {
@@ -212,12 +213,22 @@ func TestAudit_timeoutIsInterrupted(t *testing.T) {
 	newAuditHarness(t)
 	src, _ := auditSource(t)
 	outDir := filepath.Join(t.TempDir(), "out")
+	started := make(chan struct{})
+	var once sync.Once
 	fake := auditFakeRunner{behave: func(ctx context.Context, _ worker.SkillJob) (worker.SkillResult, error) {
+		once.Do(func() { close(started) })
 		<-ctx.Done()
 		return worker.SkillResult{}, ctx.Err()
 	}}
 
-	err := runAuditWith(auditArgs(src, outDir, "-audit-timeout", "200ms"), &bytes.Buffer{}, fakeSetup(fake))
+	// The queue polls once a second, so the timeout leaves room for the scan
+	// to be claimed and running before the audit stops it.
+	err := runAuditWith(auditArgs(src, outDir, "-audit-timeout", "5s"), &bytes.Buffer{}, fakeSetup(fake))
+	select {
+	case <-started:
+	default:
+		t.Fatal("triage never started, so the timeout cancelled nothing")
+	}
 	if got := exitCodeOf(err); got != auditIncompleteExitCode {
 		t.Fatalf("exit code = %d (err %v), want %d", got, err, auditIncompleteExitCode)
 	}
@@ -225,10 +236,41 @@ func TestAudit_timeoutIsInterrupted(t *testing.T) {
 	if m.Status != "interrupted" {
 		t.Errorf("status = %q, want interrupted", m.Status)
 	}
-	for _, s := range m.Scans {
-		if s.Status == "running" {
-			t.Errorf("scan %d still running in manifest", s.ID)
+	// The timeout must have cancelled the running triage scan with the
+	// audit's reason, not the default "cancelled by user".
+	var triage *auditScan
+	for i := range m.Scans {
+		if m.Scans[i].Skill == "triage" {
+			triage = &m.Scans[i]
 		}
+	}
+	if triage == nil {
+		t.Fatalf("scans = %+v, want a triage scan", m.Scans)
+	}
+	if triage.Status != "cancelled" || triage.Error != "audit interrupted: audit timeout reached" {
+		t.Errorf("triage = %+v, want cancelled with the audit timeout reason", *triage)
+	}
+}
+
+func TestExitCodeFor(t *testing.T) {
+	if got := exitCodeFor(&auditIncompleteError{Status: "incomplete", Reason: "1 scan failed"}); got != auditIncompleteExitCode {
+		t.Errorf("incomplete audit exit = %d, want %d", got, auditIncompleteExitCode)
+	}
+	if got := exitCodeFor(fmt.Errorf("wrapped: %w", &auditIncompleteError{Status: "interrupted"})); got != auditIncompleteExitCode {
+		t.Errorf("wrapped incomplete audit exit = %d, want %d", got, auditIncompleteExitCode)
+	}
+	// A child process that exits 3 must not read as an incomplete audit.
+	name, args := "sh", []string{"-c", "exit 3"}
+	if runtime.GOOS == "windows" {
+		name, args = "cmd", []string{"/c", "exit 3"}
+	}
+	childErr := exec.Command(name, args...).Run()
+	var exitErr *exec.ExitError
+	if !errors.As(childErr, &exitErr) || exitErr.ExitCode() != 3 {
+		t.Fatalf("child err = %v, want exit status 3", childErr)
+	}
+	if got := exitCodeFor(fmt.Errorf("run child: %w", childErr)); got != 1 {
+		t.Errorf("wrapped child exit error maps to %d, want 1", got)
 	}
 }
 
@@ -238,6 +280,11 @@ func TestAudit_flagValidation(t *testing.T) {
 	file := filepath.Join(src, "main.go")
 	staleData := t.TempDir()
 	if err := os.WriteFile(filepath.Join(staleData, dbFileName), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// An instance with its database in Postgres keeps only workspaces here.
+	busyData := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(busyData, "work", "scan-1"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	outDir := filepath.Join(t.TempDir(), "out")
@@ -251,6 +298,7 @@ func TestAudit_flagValidation(t *testing.T) {
 		"source not a dir": {"-source", file, "-out", outDir},
 		"source missing":   {"-source", filepath.Join(src, "nope"), "-out", outDir},
 		"data has a db":    {"-source", src, "-out", outDir, "-data", staleData},
+		"data not empty":   {"-source", src, "-out", outDir, "-data", busyData},
 		"stray positional": {"-source", src, "-out", outDir, "extra"},
 		"unknown flag":     {"-source", src, "-out", outDir, "-no-such-flag"},
 	}

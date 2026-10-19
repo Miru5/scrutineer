@@ -11,6 +11,19 @@ if [ -z "${OSS_CRS_TARGET_SOURCE:-}" ] || [ ! -d "$OSS_CRS_TARGET_SOURCE" ]; the
   exit 2
 fi
 
+# claude refuses bypassPermissions as root and the agent should not hold root
+# inside the CRS container, so a root start must have a user to drop to.
+# Running every scan as root would fail each one and still submit an
+# incomplete report, so a missing user stops here instead.
+audit_user=
+if [ "$(id -u)" = 0 ]; then
+  audit_user=${SCRUTINEER_AUDIT_USER:-runner}
+  if ! id "$audit_user" > /dev/null 2>&1; then
+    echo "run-auditor: audit user $audit_user does not exist; refusing to run the audit as root" >&2
+    exit 2
+  fi
+fi
+
 work=${SCRUTINEER_AUDIT_WORK:-/tmp/scrutineer-audit}
 out=$work/out
 data=$work/data
@@ -51,16 +64,11 @@ if [ -n "${SCRUTINEER_CONCURRENCY:-}" ]; then
   args+=(-concurrency "$SCRUTINEER_CONCURRENCY")
 fi
 
-# claude refuses bypassPermissions as root and the agent should not hold root
-# inside the CRS container, so the audit runs as the runner user.
 runas=()
-if [ "$(id -u)" = 0 ]; then
-  user=${SCRUTINEER_AUDIT_USER:-runner}
-  if id "$user" > /dev/null 2>&1; then
-    chown -R "$user" "$out" "$data"
-    home=$(getent passwd "$user" | cut -d: -f6)
-    runas=(setpriv "--reuid=$user" "--regid=$user" --init-groups env "HOME=${home:-/home/$user}")
-  fi
+if [ -n "$audit_user" ]; then
+  chown -R "$audit_user" "$out" "$data"
+  home=$(getent passwd "$audit_user" | cut -d: -f6)
+  runas=(setpriv "--reuid=$audit_user" "--regid=$audit_user" --init-groups env "HOME=${home:-/home/$audit_user}")
 fi
 
 # Background plus wait so a TERM from the framework reaches scrutineer, which

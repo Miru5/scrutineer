@@ -197,6 +197,18 @@ Credentials are refused at startup on both inputs: `ValidatePeerURL` rejects use
 
 Residual: a peer that is compromised or lying can answer `match: true` for every hash it is asked, which blocks reporting until the analyst has seen the claim once. That is a nuisance, not an escalation, and the second attempt goes through. Exposing `POST /claim-check` to peers means fronting it with a reverse proxy that sets `Host: 127.0.0.1:8080`, which deliberately steps past the loopback Host check (T3) for that one route; forwarding anything more than that route is the operator's mistake to avoid, and the endpoint answers a plain 404 when no salt is configured so a non-federated instance is indistinguishable from one without it.
 
+### T15: `scrutineer audit` inside an OSS-CRS container (opt-in, contained by the CRS container)
+
+`oss-crs/run-auditor.sh` runs `scrutineer audit -no-container` against a campaign target. This is the T1 bare-metal path with a different boundary: there is no per-scan runner container, so the hostile input is the campaign's target source and the agent runs as the same `runner` uid as the scrutineer process it was started by. The surrounding OSS-CRS CRS container is what contains it. OSS-CRS gives each CRS its own container, private network, memory cap and LiteLLM budget. No Docker socket is mounted, the target source is mounted read-only and each scan works on its own copy. The entrypoint refuses to run the audit as root. See [docs/oss-crs.md](docs/oss-crs.md).
+
+A target that prompt-injects the agent (T5) into running code (T1) still gets:
+
+- Write access to the audit's sqlite database and to `-out`, because both belong to the uid the agent runs as. It can forge or suppress the bug candidates and the report that the entrypoint submits, including `audit.json`'s status. Treat submitted candidates as unverified leads: each SARIF result carries `verification.status`, which is `unverified` unless a `verify` run set it.
+- `ANTHROPIC_API_KEY`, which in this mode is the per-CRS LiteLLM key the entrypoint reads from `OSS_CRS_LLM_API_KEY_FILE`. It can spend that key up to the campaign's `llm_budget`, which LiteLLM enforces. It cannot reach the operator's provider key, which stays in the LiteLLM container.
+- Whatever the campaign network allows. Scrutineer's egress proxy (T13) does not run in `-no-container` mode, so in-container code can reach the LiteLLM proxy and any destination the OSS-CRS network permits.
+
+It does not get the host: there is no runtime socket (T12). An audit's data directory must be new or empty, so it never shares a database or workspaces with an operator instance. Residual: the integrity of what one audit submits rests on the agent not being subverted by the target it audits, the same limit T5 describes for findings on an ordinary instance.
+
 ## Minor observations
 
 The ecosyste.ms clients identify as `scrutineer (andrew@ecosyste.ms)`. Worth a config flag before anyone else runs it.

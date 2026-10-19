@@ -67,11 +67,7 @@ func main() {
 	if handled, err := dispatch(os.Args[1:], os.Stdout); handled {
 		if err != nil {
 			log.Error("command failed", "err", err)
-			var coded interface{ ExitCode() int }
-			if errors.As(err, &coded) {
-				os.Exit(coded.ExitCode())
-			}
-			os.Exit(1)
+			os.Exit(exitCodeFor(err))
 		}
 		return
 	}
@@ -79,6 +75,16 @@ func main() {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
+}
+
+// exitCodeFor maps a subcommand error to the process exit status. Only the
+// audit's own incomplete result gets a distinct code: a wrapped *exec.ExitError
+// also has an ExitCode method and must not turn a child's status into ours.
+func exitCodeFor(err error) int {
+	if incomplete, ok := errors.AsType[*auditIncompleteError](err); ok {
+		return incomplete.ExitCode()
+	}
+	return 1
 }
 
 // flags holds the merged result of CLI flags and the YAML config file.

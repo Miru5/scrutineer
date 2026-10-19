@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -55,6 +56,11 @@ var (
 	// auditDrainTimeout bounds the wait for running scans to finalize once the
 	// queue is told to stop.
 	auditDrainTimeout = 30 * time.Second
+	// auditSignalDrainTimeout is the shorter drain after SIGINT or SIGTERM.
+	// Docker kills a stopped container 10 seconds after SIGTERM by default and
+	// OSS-CRS sets no stop grace period, so the export and both libCRS submit
+	// calls need most of that window.
+	auditSignalDrainTimeout = 3 * time.Second
 	// auditAppHook is called with the wired app before anything runs. Tests
 	// use it to reach the database; it is nil in production.
 	auditAppHook func(*app)
@@ -142,7 +148,6 @@ func runAuditWith(args []string, out io.Writer, setup runnerSetup) error {
 		return err
 	}
 	defer closeAuditDB(a.db)
-	a.server.DisableEcosystems()
 	if auditAppHook != nil {
 		auditAppHook(a)
 	}
@@ -209,13 +214,22 @@ func resolveAuditPaths(opts *auditOptions) error {
 }
 
 // prepareAuditData picks the data directory and pins it so the config file
-// cannot redirect the audit into an operator's database. Without an explicit
-// -data it uses a fresh temp dir that the returned cleanup removes.
+// cannot redirect the audit into an operator's database. An explicit -data must
+// be new or empty. Without one it uses a fresh temp dir that the returned
+// cleanup removes.
 func prepareAuditData(f *flags, log *slog.Logger) (func(), error) {
 	cleanup := func() {}
 	if f.set["data"] {
-		if _, err := os.Stat(filepath.Join(f.dataDir, dbFileName)); err == nil {
-			return nil, fmt.Errorf("-data %s already contains %s; use an empty directory so stale results never mix in", f.dataDir, dbFileName)
+		// Any existing content is refused, not just scrutineer.db: an instance
+		// that keeps its database in Postgres still has work/scan-<id>
+		// workspaces here. The worker's startup sweep would delete every one
+		// the empty audit database does not know about.
+		entries, err := os.ReadDir(f.dataDir)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("-data %s: %w", f.dataDir, err)
+		}
+		if len(entries) > 0 {
+			return nil, fmt.Errorf("-data %s is not empty; use a new or empty directory so the audit never touches another instance's data", f.dataDir)
 		}
 	} else {
 		dir, err := os.MkdirTemp("", "scrutineer-audit-")
@@ -259,6 +273,7 @@ func closeAuditDB(gdb *gorm.DB) {
 // auditOutcome is how the wait ended.
 type auditOutcome struct {
 	interrupted bool
+	signalled   bool
 	reason      string
 }
 
@@ -283,7 +298,7 @@ func runAuditApp(a *app, ln net.Listener, opts *auditOptions, out io.Writer) err
 		close(queueDone)
 	}()
 	// Safety net for early returns; the normal path stops the queue below.
-	defer func() { stopQueue(); drainQueue(queueDone) }()
+	defer func() { stopQueue(); drainQueue(queueDone, auditDrainTimeout) }()
 
 	repo, isNew, err := a.server.AddRepository(auditCtx, opts.source)
 	if err != nil {
@@ -294,8 +309,15 @@ func runAuditApp(a *app, ln net.Listener, opts *auditOptions, out io.Writer) err
 	}
 
 	outcome := waitForAudit(auditCtx, a.db, repo.ID)
+	drain := auditDrainTimeout
+	if outcome.interrupted {
+		cancelRunningScans(a, repo.ID, "audit "+auditInterrupted+": "+outcome.reason)
+	}
+	if outcome.signalled {
+		drain = auditSignalDrainTimeout
+	}
 	stopQueue()
-	drainQueue(queueDone)
+	drainQueue(queueDone, drain)
 
 	return finishAudit(a, outcome, repo, started, opts, out, ln.Addr().String())
 }
@@ -306,12 +328,27 @@ func shutdownAuditServer(srv *http.Server) {
 	_ = srv.Shutdown(ctx)
 }
 
+// cancelRunningScans stops the repository's running scans with reason, so their
+// recorded error says why the audit stopped them. Stopping the queue alone
+// would record the default "cancelled by user".
+func cancelRunningScans(a *app, repoID uint, reason string) {
+	var ids []uint
+	if err := a.db.Model(&db.Scan{}).Where("repository_id = ? AND status = ?", repoID, db.ScanRunning).Pluck("id", &ids).Error; err != nil {
+		return
+	}
+	for _, id := range ids {
+		// A nil audit callback cannot fail. A scan that already finished is
+		// simply not running any more.
+		_, _ = a.worker.CancelWithAudit(id, reason, nil)
+	}
+}
+
 // drainQueue waits for the queue to finish its in-flight jobs, giving up after
-// auditDrainTimeout.
-func drainQueue(done <-chan struct{}) {
+// timeout.
+func drainQueue(done <-chan struct{}, timeout time.Duration) {
 	select {
 	case <-done:
-	case <-time.After(auditDrainTimeout):
+	case <-time.After(timeout):
 	}
 }
 
@@ -349,7 +386,7 @@ func interruptedOutcome(ctx context.Context) auditOutcome {
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return auditOutcome{interrupted: true, reason: "audit timeout reached"}
 	}
-	return auditOutcome{interrupted: true, reason: "interrupted by signal"}
+	return auditOutcome{interrupted: true, signalled: true, reason: "interrupted by signal"}
 }
 
 // finishAudit exports the results, writes the outputs and turns the outcome

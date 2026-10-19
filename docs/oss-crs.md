@@ -7,7 +7,7 @@
 `oss-crs/crs.yaml` declares one run module, `auditor`, with `target_dependent: false`, so no target build is needed and the campaign only supplies source.
 
 - `oss-crs prepare` builds the runner image from `Dockerfile.runner` through `oss-crs/build.hcl` (tag `scrutineer-oss-crs-base:1.0.0`), then builds the auditor module on top of it (tag `oss-crs-runner:scrutineer-auditor`). The runner image already carries `claude`, the analysis tools and the `scrutineer` binary. The module adds libCRS and the entrypoint `oss-crs/run-auditor.sh`.
-- `oss-crs run` starts the auditor container with the target source mounted read-only at `OSS_CRS_TARGET_SOURCE`. The entrypoint runs `scrutineer audit -no-container` against it with the claude backend, as the non-root `runner` user. No Docker socket is mounted: the CRS container is the isolation boundary, so scans run `claude` directly inside it.
+- `oss-crs run` starts the auditor container with the target source mounted read-only at `OSS_CRS_TARGET_SOURCE`. The entrypoint runs `scrutineer audit -no-container` against it with the claude backend, as the non-root `runner` user. No Docker socket is mounted: the CRS container is the isolation boundary, so scans run `claude` directly inside it. [Threat model T15](../threatmodel.md#t15-scrutineer-audit-inside-an-oss-crs-container-opt-in-contained-by-the-crs-container) lists what a target that subverts the agent can still reach.
 - The audit is the usual triage pipeline. Triage fans out the audit skills and hooks chain the follow-ups (revalidate, dedup, reflect). The source is a local repository, so skills that require a remote forge are skipped.
 - When the audit ends the entrypoint submits the bug-candidate SARIF and the report directory through libCRS.
 
@@ -73,7 +73,7 @@ The entrypoint points `ANTHROPIC_BASE_URL` at `OSS_CRS_LLM_API_URL`, reads the p
 
 - `complete`: every scan finished as done or skipped.
 - `incomplete`: some scan failed, was cancelled or paused, never ran, or no scan ran at all. `reason` counts them, for example `2 scans failed, 1 scan paused`.
-- `interrupted`: the audit timeout was reached or the process got SIGINT or SIGTERM. Running scans are cancelled and whatever finished is still exported.
+- `interrupted`: the audit timeout was reached or the process got SIGINT or SIGTERM. Running scans are cancelled with that reason as their error (for example `audit interrupted: audit timeout reached`) and whatever finished is still exported.
 
 The command exits 0 for `complete` and 3 for `incomplete` or `interrupted`. The entrypoint submits results for both then exits 0, because OSS-CRS aborts a campaign as failed when a module exits non-zero, so check `status` in `audit.json`. Any other exit code from the command means setup or export failed: nothing is submitted and the entrypoint exits with that code.
 
@@ -81,7 +81,7 @@ The command exits 0 for `complete` and 3 for `incomplete` or `interrupted`. The 
 
 Spend is capped by the LiteLLM `llm_budget` in the compose file. Per-scan cost caps inside Scrutineer are tracked in [issue 774](https://github.com/alpha-omega-security/scrutineer/issues/774).
 
-Set `SCRUTINEER_AUDIT_TIMEOUT` below the campaign `--timeout`. The audit then stops and submits before the framework kills the container. A SIGTERM from the framework has the same effect and produces an `interrupted` manifest.
+Set `SCRUTINEER_AUDIT_TIMEOUT` below the campaign `--timeout`. The audit then stops and submits before the framework stops the container. Rely on it rather than on SIGTERM: OSS-CRS stops a timed-out run with `docker compose stop` and sets no stop grace period, so Docker kills the container 10 seconds after SIGTERM. The audit shortens its drain after a signal to leave time for the export and both `libCRS submit` calls, but a submission after SIGTERM is best effort.
 
 ## Rebuilding after code changes
 
@@ -111,4 +111,4 @@ It accepts every server flag plus:
 
 `-trusted-model-host` relaxes the https requirement for that one hostname only. Every other model URL still has to use https unless it is loopback.
 
-The audit never touches an operator instance. Without `-data` it uses a fresh temporary directory and removes it at the end. With `-data` it refuses a directory that already holds `scrutineer.db`. Any `data` or database setting in the config file is ignored: the audit always uses sqlite in its own data directory and listens on an ephemeral loopback port. It does not start the scheduler, federation, the ecosystems lookups or the CNA sync.
+The audit never touches an operator instance. Without `-data` it uses a fresh temporary directory and removes it at the end. With `-data` it refuses a directory that is not empty, so it never sweeps the workspaces of an instance that keeps its database elsewhere. Any `data` or database setting in the config file is ignored: the audit always uses sqlite in its own data directory and listens on an ephemeral loopback port. It does not start the scheduler, federation, the ecosystems lookups or the CNA sync.
