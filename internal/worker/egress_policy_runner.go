@@ -6,35 +6,54 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"slices"
 	"strings"
 	"sync"
 
 	"scrutineer/internal/egressgrant"
 )
 
-// applyEgressPolicy applies the operator's egress grants for sj's skill to a
-// copy of the runner. A skill without a policy gets the runner back untouched.
-// Grants need --hardened: without the per-scan --internal network a scan could
-// clear its proxy variables and ignore the port gate, so the scan is refused
-// rather than run with grants nothing enforces. The returned cleanup must run
-// after the scan and emits any denials the host proxy recorded.
+// hasEgressPolicy reports whether sj needs applyEgressPolicy: its skill has a
+// policy or the operator attached a scan policy. A scan policy name counts even
+// when it is not configured so applyEgressPolicy can refuse the scan.
+func (d ContainerRunner) hasEgressPolicy(sj SkillJob) bool {
+	return len(d.EgressPolicies[sj.Name]) > 0 || sj.EgressPolicy != ""
+}
+
+// applyEgressPolicy applies the operator's egress grants for sj to a copy of
+// the runner: the skill's policy plus the scan policy the operator attached, if
+// any. A job with neither gets the runner back untouched. Grants need
+// --hardened: without the per-scan --internal network a scan could clear its
+// proxy variables and ignore the port gate, so the scan is refused rather than
+// run with grants nothing enforces. A scan policy that is no longer configured
+// is refused too, so a retry never runs without the egress it was launched
+// with. The returned cleanup must run after the scan and emits any denials the
+// host proxy recorded.
 func (d ContainerRunner) applyEgressPolicy(sj SkillJob, emit func(Event)) (ContainerRunner, func(), error) {
 	noop := func() {}
-	grants := d.EgressPolicies[sj.Name]
-	if len(grants) == 0 {
+	if !d.hasEgressPolicy(sj) {
 		return d, noop, nil
 	}
-	if !d.Hardened {
-		return d, noop, fmt.Errorf("egress policy for skill %q requires --hardened; refusing to run with unenforced grants", sj.Name)
+	skillGrants := d.EgressPolicies[sj.Name]
+	scanGrants, ok := d.ScanEgressPolicies[sj.EgressPolicy]
+	if sj.EgressPolicy != "" && !ok {
+		return d, noop, fmt.Errorf("scan egress policy %q is not configured; refusing to run without the egress it was launched with", sj.EgressPolicy)
 	}
-	emit(Event{Kind: KindEgress, Text: fmt.Sprintf("egress-policy: skill=%s grants=%s", sj.Name, egressgrant.Format(grants))})
+	who := egressPolicyOwner(sj)
+	if !d.Hardened {
+		return d, noop, fmt.Errorf("egress policy for %s requires --hardened; refusing to run with unenforced grants", who)
+	}
+	grants := egressgrant.Merge(skillGrants, scanGrants)
+	text := fmt.Sprintf("egress-policy: skill=%s grants=%s", sj.Name, egressgrant.Format(grants))
+	if sj.EgressPolicy != "" {
+		text = fmt.Sprintf("egress-policy: skill=%s scan_policy=%s grants=%s", sj.Name, sj.EgressPolicy, egressgrant.Format(grants))
+	}
+	emit(Event{Kind: KindEgress, Text: text})
 	if d.usesEgressSidecar() {
-		d.Egress.Grants = slices.Clone(grants)
+		d.Egress.Grants = grants
 		return d, noop, nil
 	}
 	if d.ProviderProxy.ContainerHost == "" {
-		return d, noop, fmt.Errorf("egress policy for skill %q cannot start a scoped proxy because the container host endpoint is unavailable", sj.Name)
+		return d, noop, fmt.Errorf("egress policy for %s cannot start a scoped proxy because the container host endpoint is unavailable", who)
 	}
 	rec := &lineBuffer{}
 	token := NewProxyToken()
@@ -47,7 +66,7 @@ func (d ContainerRunner) applyEgressPolicy(sj SkillJob, emit func(Event)) (Conta
 		Log:       slog.New(&recordingHandler{inner: forwardHandler(d.ProviderProxy.Log), rec: newWarnHandler(rec)}),
 	}, grants...)
 	if err != nil {
-		return d, noop, fmt.Errorf("start egress policy proxy for skill %q: %w", sj.Name, err)
+		return d, noop, fmt.Errorf("start egress policy proxy for %s: %w", who, err)
 	}
 	d.ProxyURL = ProxyURLForHost(token, d.ProviderProxy.ContainerHost, port)
 	return d, func() {
@@ -56,6 +75,15 @@ func (d ContainerRunner) applyEgressPolicy(sj SkillJob, emit func(Event)) (Conta
 			emit(Event{Kind: KindEgress, Text: "egress-proxy: " + line})
 		}
 	}, nil
+}
+
+// egressPolicyOwner names what the policy belongs to for error messages. Skill
+// only policies keep the original `skill "x"` wording.
+func egressPolicyOwner(sj SkillJob) string {
+	if sj.EgressPolicy == "" {
+		return fmt.Sprintf("skill %q", sj.Name)
+	}
+	return fmt.Sprintf("skill %q with scan policy %q", sj.Name, sj.EgressPolicy)
 }
 
 // lineBuffer is a mutex-guarded sink for the text lines the proxy goroutines

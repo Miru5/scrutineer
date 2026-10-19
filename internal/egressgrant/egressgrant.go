@@ -44,6 +44,11 @@ func Parse(entries []string) ([]Grant, error) {
 		}
 		byHost[host] = append(byHost[host], port)
 	}
+	return normalize(byHost), nil
+}
+
+// normalize sorts hosts and sorts and deduplicates each host's ports.
+func normalize(byHost map[string][]string) []Grant {
 	hosts := make([]string, 0, len(byHost))
 	for host := range byHost {
 		hosts = append(hosts, host)
@@ -59,7 +64,19 @@ func Parse(entries []string) ([]Grant, error) {
 		})
 		grants = append(grants, Grant{Host: host, Ports: slices.Compact(ports)})
 	}
-	return grants, nil
+	return grants
+}
+
+// Merge unions grant sets into one in Parse's normal form: hosts sorted, ports
+// unioned per host, sorted numerically and deduplicated.
+func Merge(sets ...[]Grant) []Grant {
+	byHost := map[string][]string{}
+	for _, set := range sets {
+		for _, g := range set {
+			byHost[g.Host] = append(byHost[g.Host], g.Ports...)
+		}
+	}
+	return normalize(byHost)
 }
 
 func parseEntry(entry string) (host, port string, err error) {

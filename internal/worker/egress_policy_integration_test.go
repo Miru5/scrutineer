@@ -171,6 +171,81 @@ func TestIntegration_EgressPolicyInstallFailureRefusesScan(t *testing.T) {
 	if len(res.files) != 0 {
 		t.Errorf("the skill ran despite the failed policy install: %v", res.files)
 	}
+
+	// A scan policy on a skill without its own policy fails closed the same way.
+	runner.EgressPolicies = nil
+	runner.ScanEgressPolicies = map[string][]EgressGrant{"net": grants}
+	res = runPolicyProbeWithScanPolicy(t, runner, "plain", "net")
+	if res.err == nil {
+		t.Fatal("scan with a scan policy ran although the sidecar image cannot enforce it")
+	}
+	if len(res.files) != 0 {
+		t.Errorf("the skill ran despite the failed scan policy install: %v", res.files)
+	}
+}
+
+func TestIntegration_EgressPolicyPerScan(t *testing.T) {
+	rt, image := policyIntegrationSetup(t)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	defer api.Close()
+	_, apiPort, err := net.SplitHostPort(api.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gatewayIP := ResolveHostGatewayIPv4(rt, image, "")
+	if gatewayIP == "" {
+		t.Fatal("host-gateway did not resolve on Docker Desktop")
+	}
+	net443, _ := egressgrant.Parse([]string{"example.com:443"})
+	runner := ContainerRunner{
+		Image:    image,
+		Harness:  policyProbeHarness{},
+		Hardened: true,
+		Runtime:  rt,
+		Egress: EgressSidecarConfig{
+			Token:     NewProxyToken(),
+			Allow:     []string{HostGatewayAlias},
+			APIPort:   apiPort,
+			GatewayIP: gatewayIP,
+		},
+		ScanEgressPolicies: map[string][]EgressGrant{"net": net443},
+	}
+
+	// Two concurrent scans of the same skill: only the first carries a policy.
+	var with, without policyProbeResult
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() { defer wg.Done(); with = runPolicyProbeWithScanPolicy(t, runner, "shared", "net") }()
+	go func() { defer wg.Done(); without = runPolicyProbeWithScanPolicy(t, runner, "shared", "") }()
+	wg.Wait()
+
+	if with.err != nil {
+		t.Fatalf("scan with policy: RunSkill: %v", with.err)
+	}
+	if without.err != nil {
+		t.Fatalf("scan without policy: RunSkill: %v", without.err)
+	}
+	if !with.reached("example_com") {
+		t.Errorf("scan with policy could not reach example.com (exit %s code %s): %s; if the network is unreachable from Docker this test cannot pass", with.exit("example_com"), with.code("example_com"), with.files["example_com.err"])
+	}
+	if with.reached("example_org") {
+		t.Error("scan with policy reached example.org without a grant")
+	}
+	if with.reached("example_com_8443") {
+		t.Error("scan with policy reached example.com on an undeclared port")
+	}
+	if with.reached("direct") || with.exit("direct") == "0" {
+		t.Errorf("scan with policy bypassed the proxy (exit %s code %s)", with.exit("direct"), with.code("direct"))
+	}
+	if !hasEventPrefix(with.events, "egress-policy: skill=shared scan_policy=net grants=") {
+		t.Errorf("no scan_policy event in %v", with.events)
+	}
+	if without.reached("example_com") {
+		t.Error("scan without a policy reached example.com")
+	}
+	if hasEventPrefix(without.events, "egress-policy: ") {
+		t.Errorf("scan without a policy emitted an egress-policy event: %v", without.events)
+	}
 }
 
 func policyIntegrationSetup(t *testing.T) (ContainerRuntime, string) {
@@ -194,6 +269,13 @@ func policyIntegrationSetup(t *testing.T) (ContainerRuntime, string) {
 
 func runPolicyProbe(t *testing.T, runner ContainerRunner, skill string) policyProbeResult {
 	t.Helper()
+	return runPolicyProbeWithScanPolicy(t, runner, skill, "")
+}
+
+// runPolicyProbeWithScanPolicy runs the probe as skill with the operator's scan
+// policy (empty for none) attached to the job.
+func runPolicyProbeWithScanPolicy(t *testing.T, runner ContainerRunner, skill, scanPolicy string) policyProbeResult {
+	t.Helper()
 	work := newScanWorkspace(t)
 	var mu sync.Mutex
 	var events []Event
@@ -202,6 +284,7 @@ func runPolicyProbe(t *testing.T, runner ContainerRunner, skill string) policyPr
 		WorkRoot:     work,
 		SrcReady:     true,
 		Name:         skill,
+		EgressPolicy: scanPolicy,
 	}, func(e Event) { mu.Lock(); events = append(events, e); mu.Unlock() })
 	return policyProbeResult{files: readWorkspaceFiles(work), events: events, err: err}
 }

@@ -68,6 +68,10 @@
     <dt class="text-muted-foreground">Runner profile</dt>
     <dd>{{if .Profile}}{{.Profile}}{{else if eq (status .Status) "queued"}}Automatic{{else}}Not recorded{{end}}</dd>
   </div>
+  {{if .EgressPolicy}}<div>
+    <dt class="text-muted-foreground">Egress policy</dt>
+    <dd><code>{{.EgressPolicy}}</code></dd>
+  </div>{{end}}
   {{with focus .}}{{if .Name}}
   <div class="sm:col-span-3">
     <dt class="text-muted-foreground">Focus area</dt>

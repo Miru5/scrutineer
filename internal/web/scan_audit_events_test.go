@@ -350,7 +350,7 @@ func testScanControlRetryAudit(t *testing.T, mode string) {
 	case "bulk":
 		s.scansRetryFailed(w, r)
 	case "ordinary-enqueue":
-		if _, err := s.enqueueSkill(r.Context(), parent.RepositoryID, skill.ID, ""); err != nil {
+		if _, err := s.enqueueSkillWith(r.Context(), parent.RepositoryID, skill.ID, ScanOpts{}); err != nil {
 			t.Fatal(err)
 		}
 	default:

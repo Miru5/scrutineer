@@ -108,6 +108,10 @@ type Config struct {
 	// the per-scan --internal network makes the proxy the only way out. Only
 	// this file can grant egress; nothing a scan or a skill file says can.
 	EgressPolicies map[string]EgressPolicy `yaml:"egress_policies"`
+	// ScanEgressPolicies are named egress policies the operator can attach to
+	// one scan from the repository page. Like EgressPolicies they are
+	// config-file-only and need --hardened. The name is what a scan records.
+	ScanEgressPolicies map[string]EgressPolicy `yaml:"scan_egress_policies"`
 	// Concurrency controls how many scans the worker runs in parallel.
 	// 0 or negative leaves the built-in default (see queue.DefaultWorkerConcurrency).
 	Concurrency int `yaml:"concurrency"`
@@ -291,9 +295,10 @@ type EgressPolicy struct {
 const maxTCPPort = 65535
 
 var (
-	opencodeProviderID = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-	environmentName    = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
-	binaryName         = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
+	scanEgressPolicyName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
+	opencodeProviderID   = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+	environmentName      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	binaryName           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 )
 
 var reservedOpencodePassEnv = map[string]bool{
@@ -368,15 +373,36 @@ func validateOpencodeProvider(id string, provider OpencodeProvider) error {
 // it. Entries must name a DNS host and an explicit port so a grant can never
 // widen to IP literals or to the host services the sandbox keeps private.
 func ValidateEgressPolicies(policies map[string]EgressPolicy) error {
-	for skill, policy := range policies {
-		if strings.TrimSpace(skill) == "" {
-			return errors.New("egress_policies: skill name must not be empty")
+	return validateEgressPolicySet("egress_policies", "skill", policies, nil)
+}
+
+// ValidateScanEgressPolicies applies the same grant rules to the named
+// per-scan policies. Their names also appear in form values and logs, so they
+// are restricted to a short lowercase token.
+func ValidateScanEgressPolicies(policies map[string]EgressPolicy) error {
+	return validateEgressPolicySet("scan_egress_policies", "policy", policies, func(name string) error {
+		if !scanEgressPolicyName.MatchString(name) {
+			return fmt.Errorf("scan_egress_policies: policy name %q must be 1 to 64 lowercase letters, digits, '.', '_' or '-' and start with a letter or digit", name)
+		}
+		return nil
+	})
+}
+
+func validateEgressPolicySet(key, noun string, policies map[string]EgressPolicy, checkName func(string) error) error {
+	for name, policy := range policies {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%s: %s name must not be empty", key, noun)
+		}
+		if checkName != nil {
+			if err := checkName(name); err != nil {
+				return err
+			}
 		}
 		if len(policy.Allow) == 0 {
-			return fmt.Errorf("egress_policies.%s.allow: at least one host:port entry is required", skill)
+			return fmt.Errorf("%s.%s.allow: at least one host:port entry is required", key, name)
 		}
 		if _, err := egressgrant.Parse(policy.Allow); err != nil {
-			return fmt.Errorf("egress_policies.%s.allow: %w", skill, err)
+			return fmt.Errorf("%s.%s.allow: %w", key, name, err)
 		}
 	}
 	return nil
@@ -613,6 +639,9 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if err := ValidateEgressPolicies(c.EgressPolicies); err != nil {
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
+	}
+	if err := ValidateScanEgressPolicies(c.ScanEgressPolicies); err != nil {
 		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if c.VINCE.Enabled() {

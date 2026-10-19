@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"scrutineer/internal/db"
@@ -235,5 +236,24 @@ func TestBuildScanRecipe_digestsAndOptionalFields(t *testing.T) {
 	}
 	if !json.Valid([]byte(out)) {
 		t.Errorf("recipe is not valid JSON with a malformed focus area: %s", out)
+	}
+}
+
+func TestBuildScanRecipe_recordsScanEgressPolicyName(t *testing.T) {
+	for _, tc := range []struct{ policy, wantKey bool }{{false, false}, {true, true}} {
+		scan := &db.Scan{Kind: JobSkill, SkillName: "deep-dive"}
+		if tc.policy {
+			scan.EgressPolicy = "registries"
+		}
+		raw, err := buildScanRecipe(scan, "claude", "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(raw, `"egress_policy":"registries"`); got != tc.wantKey {
+			t.Errorf("policy=%v: recipe %s, egress_policy present = %v", tc.policy, raw, got)
+		}
+		if !tc.policy && strings.Contains(raw, "egress_policy") {
+			t.Errorf("recipe without a policy mentions egress_policy: %s", raw)
+		}
 	}
 }

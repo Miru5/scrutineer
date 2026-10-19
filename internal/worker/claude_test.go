@@ -469,3 +469,11 @@ func flagValue(args []string, flag string) string {
 	}
 	return ""
 }
+
+func TestLocalClaude_RunSkill_rejectsScanEgressPolicy(t *testing.T) {
+	sj := SkillJob{Name: "plain", WorkRoot: t.TempDir(), SrcReady: true, EgressPolicy: "net"}
+	_, err := LocalClaude{}.RunSkill(context.Background(), sj, func(Event) { t.Error("local runner did work before refusing") })
+	if err == nil || !strings.Contains(err.Error(), `"net"`) || !strings.Contains(err.Error(), "local runner") {
+		t.Fatalf("err = %v, want a refusal naming the policy and the local runner", err)
+	}
+}

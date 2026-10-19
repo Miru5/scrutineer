@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -711,6 +712,7 @@ func run(log *slog.Logger) error {
 	}
 	srv.SkillsRepoSHA = skillsRepoSHA
 	srv.ModelProxy = worker.ModelProxyOf(runner)
+	srv.ScanEgressPolicies = slices.Sorted(maps.Keys(cfg.ScanEgressPolicies))
 	srv.Version = version
 	build := readBuildMetadata()
 	srv.Commit = build.Commit
@@ -1139,6 +1141,10 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	if err != nil {
 		return nil, "", err
 	}
+	scanPolicies, err := scanEgressPolicyGrants(cfg)
+	if err != nil {
+		return nil, "", err
+	}
 	var egress worker.EgressSidecarConfig
 	var configuredProviders map[string]config.OpencodeProvider
 	if cfg != nil {
@@ -1168,7 +1174,7 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 	// the egress proxy as a per-scan sidecar. Resolve it before the in-process
 	// host proxy so the latter can be skipped when the sidecar is in charge.
 	if f.hardened {
-		egress, err = resolveEgressSidecar(rt, f, allow, token, log, policies)
+		egress, err = resolveEgressSidecar(rt, f, allow, token, log, len(policies) > 0 || len(scanPolicies) > 0)
 		if err != nil {
 			return nil, "", err
 		}
@@ -1222,10 +1228,11 @@ func setupRunner(f *flags, cfg *config.Config, log *slog.Logger) (worker.SkillRu
 			ContainerHost: apiHost,
 			Log:           log,
 		},
-		EgressPolicies:    policies,
-		OpencodeProviders: opencodeProviders,
-		OpencodeReadiness: worker.NewOpencodeReadinessCache(),
-		CodexAccountAuth:  worker.NewCodexAccountAuth(f.codexAuthFile),
+		EgressPolicies:     policies,
+		ScanEgressPolicies: scanPolicies,
+		OpencodeProviders:  opencodeProviders,
+		OpencodeReadiness:  worker.NewOpencodeReadinessCache(),
+		CodexAccountAuth:   worker.NewCodexAccountAuth(f.codexAuthFile),
 	}
 	if err := applyModelProxy(f, log, apiHost, &runner); err != nil {
 		return nil, "", err
@@ -1355,18 +1362,29 @@ func warnUnknownHostSkills(log *slog.Logger, gdb *gorm.DB, names []string) {
 	}
 }
 
-// validateEgressPolicies refuses per-skill egress grants that nothing would
-// enforce. Grants are only sound on the per-scan --internal network that
-// --hardened creates. --no-container has no container to confine.
+// validateEgressPolicies refuses per-skill and per-scan egress grants that
+// nothing would enforce. Grants are only sound on the per-scan --internal
+// network that --hardened creates. --no-container has no container to confine.
 func validateEgressPolicies(f *flags, cfg *config.Config) error {
-	if cfg == nil || len(cfg.EgressPolicies) == 0 {
+	if cfg == nil {
 		return nil
 	}
-	if f.noContainer {
-		return errors.New("egress_policies cannot be enforced with --no-container (no container to confine)")
-	}
-	if !f.hardened {
-		return errors.New("egress_policies require --hardened so grants are enforced on an isolated network")
+	for _, key := range []struct {
+		name string
+		set  bool
+	}{
+		{"egress_policies", len(cfg.EgressPolicies) > 0},
+		{"scan_egress_policies", len(cfg.ScanEgressPolicies) > 0},
+	} {
+		if !key.set {
+			continue
+		}
+		if f.noContainer {
+			return fmt.Errorf("%s cannot be enforced with --no-container (no container to confine)", key.name)
+		}
+		if !f.hardened {
+			return fmt.Errorf("%s require --hardened so grants are enforced on an isolated network", key.name)
+		}
 	}
 	return nil
 }
@@ -1374,16 +1392,32 @@ func validateEgressPolicies(f *flags, cfg *config.Config) error {
 // egressPolicyGrants converts the validated config policies into the worker's
 // per-skill grants.
 func egressPolicyGrants(cfg *config.Config) (map[string][]egressgrant.Grant, error) {
-	if cfg == nil || len(cfg.EgressPolicies) == 0 {
+	if cfg == nil {
 		return nil, nil
 	}
-	out := make(map[string][]egressgrant.Grant, len(cfg.EgressPolicies))
-	for skill, policy := range cfg.EgressPolicies {
+	return policyGrants("egress_policies", cfg.EgressPolicies)
+}
+
+// scanEgressPolicyGrants converts the validated scan_egress_policies into the
+// worker's per-scan grants, keyed by policy name.
+func scanEgressPolicyGrants(cfg *config.Config) (map[string][]egressgrant.Grant, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	return policyGrants("scan_egress_policies", cfg.ScanEgressPolicies)
+}
+
+func policyGrants(key string, policies map[string]config.EgressPolicy) (map[string][]egressgrant.Grant, error) {
+	if len(policies) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]egressgrant.Grant, len(policies))
+	for name, policy := range policies {
 		grants, err := egressgrant.Parse(policy.Allow)
 		if err != nil {
-			return nil, fmt.Errorf("egress_policies.%s.allow: %w", skill, err)
+			return nil, fmt.Errorf("%s.%s.allow: %w", key, name, err)
 		}
-		out[skill] = grants
+		out[name] = grants
 	}
 	return out, nil
 }
@@ -1529,7 +1563,7 @@ func resolveScanNetworking(rt worker.ContainerRuntime, f *flags, log *slog.Logge
 // default-network host gateway the sidecar dials to reach the loopback-bound
 // host skill API. Docker Engine, rootful podman, and Apple keep the in-process
 // proxy and return the zero value.
-func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, token string, log *slog.Logger, policies map[string][]egressgrant.Grant) (worker.EgressSidecarConfig, error) {
+func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, token string, log *slog.Logger, hasPolicies bool) (worker.EgressSidecarConfig, error) {
 	if !rt.NeedsEgressSidecar() {
 		return worker.EgressSidecarConfig{}, nil
 	}
@@ -1538,7 +1572,7 @@ func resolveEgressSidecar(rt worker.ContainerRuntime, f *flags, allow []string, 
 	smokeCtx, cancel := context.WithTimeout(context.Background(), f.smokeTimeout)
 	defer cancel()
 	var extraCaps []string
-	if len(policies) > 0 {
+	if hasPolicies {
 		extraCaps = []string{worker.ProxyCapabilityEgressPortGrants}
 	}
 	if err := worker.VerifyProxyBinary(smokeCtx, rt, f.runnerImage, extraCaps...); err != nil {

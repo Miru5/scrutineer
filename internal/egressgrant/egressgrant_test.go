@@ -76,3 +76,23 @@ func TestHosts(t *testing.T) {
 		t.Errorf("Hosts = %v, want %v", got, want)
 	}
 }
+
+func TestMerge(t *testing.T) {
+	a := []Grant{{Host: "b.example.com", Ports: []string{"443"}}, {Host: "a.example.com", Ports: []string{"80", "443"}}}
+	b := []Grant{{Host: "a.example.com", Ports: []string{"9000", "443"}}, {Host: "c.example.com", Ports: []string{"22"}}}
+	got := Merge(a, nil, b)
+	want := []Grant{
+		{Host: "a.example.com", Ports: []string{"80", "443", "9000"}},
+		{Host: "b.example.com", Ports: []string{"443"}},
+		{Host: "c.example.com", Ports: []string{"22"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Merge = %+v, want %+v", got, want)
+	}
+	if !reflect.DeepEqual(a[1].Ports, []string{"80", "443"}) {
+		t.Errorf("Merge mutated its input: %+v", a)
+	}
+	if got := Merge(nil, nil); len(got) != 0 {
+		t.Errorf("Merge of nothing = %+v", got)
+	}
+}

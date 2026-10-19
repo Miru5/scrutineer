@@ -96,6 +96,10 @@ type SkillJob struct {
 	// runner image. Only the container runner honours this; the local
 	// runner ignores it (no per-profile image to swap to).
 	Profile string
+	// EgressPolicy is the operator-selected scan_egress_policies name for this
+	// scan, copied from the scan row. Empty means none. Only the container
+	// runner can enforce it, so the local runner refuses a job that has one.
+	EgressPolicy string
 	// RequiresProfile pins the skill to a named profile. When set, the
 	// runner fails the scan if the resolved profile does not match.
 	// Empty means no constraint. Mirrors db.Skill.RequiresProfile.
@@ -210,6 +214,9 @@ func (LocalClaude) Backend() string { return HarnessName(ClaudeHarness{}) }
 //	{DataDir}/scan-{id}/.claude/skills/NAME staged skill (read by claude-code)
 //	{DataDir}/scan-{id}/OutputFile          where the skill writes, if any
 func (l LocalClaude) RunSkill(ctx context.Context, sj SkillJob, emit func(Event)) (SkillResult, error) {
+	if sj.EgressPolicy != "" {
+		return SkillResult{}, fmt.Errorf("scan egress policy %q cannot be enforced by the local runner (no container to confine)", sj.EgressPolicy)
+	}
 	var src string
 	if sj.SrcReady {
 		src = filepath.Join(sj.WorkRoot, "src")

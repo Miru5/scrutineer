@@ -36,7 +36,7 @@ func TestEnqueueSkill_refusedForOptedOutRepository(t *testing.T) {
 	skill := db.Skill{Name: "security-deep-dive", Active: true}
 	s.DB.Create(&skill)
 
-	if _, err := s.enqueueSkill(context.Background(), repo.ID, skill.ID, ""); !errors.Is(err, ErrRepoFederationOptOut) {
+	if _, err := s.enqueueSkillWith(context.Background(), repo.ID, skill.ID, ScanOpts{}); !errors.Is(err, ErrRepoFederationOptOut) {
 		t.Fatalf("expected ErrRepoFederationOptOut, got %v", err)
 	}
 	var scans int64
@@ -53,7 +53,7 @@ func TestEnqueueSkill_allowedWhenNotOptedOut(t *testing.T) {
 	skill := db.Skill{Name: "security-deep-dive", Active: true}
 	s.DB.Create(&skill)
 
-	if _, err := s.enqueueSkill(context.Background(), repo.ID, skill.ID, ""); err != nil {
+	if _, err := s.enqueueSkillWith(context.Background(), repo.ID, skill.ID, ScanOpts{}); err != nil {
 		t.Fatalf("a repository that did not opt out must still be scannable: %v", err)
 	}
 }
@@ -296,7 +296,7 @@ func TestEnqueueSkill_refusedWhenTheOptOutLandsBeforeTheScanIsCommitted(t *testi
 	}
 	defer func() { _ = s.DB.Callback().Create().Remove("test:opt_out_mid_enqueue") }()
 
-	if _, err := s.enqueueSkill(context.Background(), repo.ID, skill.ID, ""); !errors.Is(err, ErrRepoFederationOptOut) {
+	if _, err := s.enqueueSkillWith(context.Background(), repo.ID, skill.ID, ScanOpts{}); !errors.Is(err, ErrRepoFederationOptOut) {
 		t.Fatalf("enqueue = %v, want ErrRepoFederationOptOut", err)
 	}
 	var scans int64

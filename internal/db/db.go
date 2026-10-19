@@ -354,6 +354,10 @@ type Scan struct {
 	// a docker/profiles/<name>/ entry. Persisted so retries reuse the
 	// operator's override and the UI can show the chosen ecosystem.
 	Profile string `gorm:"index"`
+	// EgressPolicy is the scan_egress_policies name the operator picked for
+	// this scan. Empty when the scan has none. Set only from the operator UI
+	// and carried on retry, never from the skill API or a follow-up hook.
+	EgressPolicy string
 
 	// Backend is the harness (agent CLI) that ran this scan — the -backend
 	// value, e.g. "claude" or "codex". Stamped by the worker so a retry

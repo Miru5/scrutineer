@@ -22,9 +22,10 @@ import (
 //     (skill.go), which is well after the claim, so a recipe written at pickup
 //     would pin an empty string forever. Recipe.Ref records what was asked for;
 //     Scan.Commit remains the record of what that resolved to.
-//   - The runner image digest, effective tool set and egress policy. Those are
-//     properties of the container the scan runs in, which is not created until
-//     after the claim either.
+//   - The runner image digest, effective tool set and effective egress grants.
+//     Those are properties of the container the scan runs in, which is not
+//     created until after the claim either. The requested scan egress policy
+//     name is recorded because it is an input, not a container property.
 type ScanRecipe struct {
 	Kind string `json:"kind,omitempty"`
 
@@ -43,9 +44,13 @@ type ScanRecipe struct {
 	SkillSchemaVersion int    `json:"skill_schema_version,omitempty"`
 	SkillsRepoSHA      string `json:"skills_repo_sha,omitempty"`
 
-	Profile   string `json:"profile,omitempty"`
-	SubPath   string `json:"sub_path,omitempty"`
-	ScopeMode string `json:"scope_mode,omitempty"`
+	Profile string `json:"profile,omitempty"`
+	// EgressPolicy is the operator-selected scan egress policy name. The
+	// effective grants are not recorded here but the requested name is an
+	// input known at claim time.
+	EgressPolicy string `json:"egress_policy,omitempty"`
+	SubPath      string `json:"sub_path,omitempty"`
+	ScopeMode    string `json:"scope_mode,omitempty"`
 
 	// FocusArea is embedded as parsed JSON rather than an escaped string so
 	// a recipe diff shows the focus fields that changed, not one opaque
@@ -99,6 +104,7 @@ func buildScanRecipe(scan *db.Scan, backend, threatModel, scanConfig string) (st
 		SkillSchemaVersion:   scan.SkillSchemaVersion,
 		SkillsRepoSHA:        scan.SkillsRepoSHA,
 		Profile:              scan.Profile,
+		EgressPolicy:         scan.EgressPolicy,
 		SubPath:              scan.SubPath,
 		ScopeMode:            scan.ScopeMode,
 		TriageScanID:         scan.TriageScanID,
