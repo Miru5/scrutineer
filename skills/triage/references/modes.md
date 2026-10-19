@@ -119,3 +119,38 @@ set before enqueueing: each skill is requested at most once and uses the same
 ref/subpath. Each also obeys the existing active/completed skip set. An
 inactive companion audit is recorded as skipped, not replaced with a second
 broad scan.
+
+## file-parser
+
+Select this mode when first-party source implements a decoder, parser,
+reader, converter, extractor, validator or file processor for a file or data
+format: archives and compression, images, media, documents, fonts,
+serialization and markup formats such as XML, YAML and JSON variants,
+configuration formats or binary container formats. Trace a public API, CLI
+command or processing entry point into the code that interprets the bytes of
+input it does not control. A web service that parses uploads may match this
+mode alongside `web-api`.
+
+A project that merely calls a parser library on its own bundled or trusted
+files, depends on a format library, or ships sample files, test corpora or
+fuzz seeds does not qualify on that evidence alone. Neither do keywords such
+as "parse" or "format", documentation or test-only harnesses. Checking a
+network protocol parser against its RFC is out of scope for this mode. Trace
+the parser in the current scan scope; do not borrow one from another monorepo
+subproject. A scan scoped to a subpath that only calls the parser, such as an
+examples directory, does not match even when the parent project does. Keep
+uncertain classifications gated and record the missing evidence.
+
+Enqueue `audit-file-parser` for a match. Also add `audit-memory` when the
+scoped parser includes first-party C, C++ or unsafe Rust that reads the input.
+Add `audit-exfil` only when the parser itself resolves external entities,
+includes or URLs named by the input. Add `audit-injection` only when it
+deserializes input into arbitrary types or evaluates it. Extracting archive
+entries to disk does not add `audit-exfil` on that evidence alone because
+`audit-file-parser` covers it. These are ordinary existing skills, not copies
+of their checklists. Gate a companion audit when its source-based
+applicability is absent. Union all matching modes' skills with the normal scan
+set before enqueueing: each skill is requested at most once and uses the same
+ref/subpath. Each also obeys the existing active/completed skip set. An
+inactive companion audit is recorded as skipped, not replaced with a second
+broad scan.

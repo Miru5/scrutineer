@@ -197,6 +197,7 @@ Adding a repo enqueues the `triage` skill, whose SKILL.md lists the further skil
 | `audit-web` | Reviews web sessions, browser origins, uploads and business workflows when triage finds an implemented web application or API |
 | `audit-embedded` | Reviews firmware updates, boot chain, provisioning, device credentials and debug interfaces when triage finds device firmware |
 | `audit-build-tooling` | Reviews untrusted-workspace execution, configuration precedence, build caches, plugin resolution and secret exposure when triage finds a build system or developer tool |
+| `audit-file-parser` | Reviews hostile-input resource limits, length handling, archive extraction, format confusion and malformed-input failures when triage finds a first-party parser or file processor |
 
 Edit `skills/triage/SKILL.md` to change what gets run by default. Drop new skill directories in `skills/` to add scan types; no code changes needed. See [docs/skills.md](docs/skills.md) for the frontmatter reference, the `scrutineer.*` metadata keys, the `context.json` shape, output kinds, schema validation, and the skill-facing HTTP API.
 

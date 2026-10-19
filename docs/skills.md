@@ -34,6 +34,7 @@ These live in `skills/` and are embedded in the Scrutineer executable. At startu
 | `audit-web` | Audits web sessions, browser origins, uploads and workflow state against a bundled threat model informed by the OWASP Application Security Verification Standard (ASVS). Triage selects it from source evidence. |
 | `audit-embedded` | Audits firmware updates, rollback protection, boot chain, provisioning, device credentials, debug interfaces and device communication against a bundled threat model informed by the OWASP IoT Security Verification Standard (ISVS). Triage selects it from source evidence. |
 | `audit-build-tooling` | Audits build systems, task runners and developer tools for workspace trust and auto-execution, configuration precedence, build cache integrity, plugin resolution and secret exposure against a bundled SLSA-informed threat model. Triage selects it from source evidence. |
+| `audit-file-parser` | Audits first-party parsers and file processors for hostile-input resource exhaustion, length and offset handling, archive extraction, format confusion, external references and malformed-input failures against a bundled CWE-referenced threat model. Triage selects it from source evidence. |
 | `cna-match` | Matches the repository to its CVE Numbering Authority so disclosures route to the right contact. |
 | `semgrep` | Runs semgrep with the `p/security-audit` and `p/secrets` rulesets and maps hits into the findings shape. |
 | `bandit` | Runs bandit over the repository's Python and maps its hits into the findings shape, grouped per test id and carrying bandit's confidence level, Common Weakness Enumeration (CWE) id, and rule documentation link. Gated on Python being one of the detected languages. |
@@ -119,6 +120,21 @@ audit distinguishes source-proven vulnerabilities from intended behavior and
 evidenced negative results. Guarantees that depend on CI runner, cache server
 or deployment evidence are recorded as unresolved assumptions. Its SLSA
 reference does not imply conformance.
+The `file-parser` mode selects `audit-file-parser` for first-party decoders,
+parsers, extractors and file processors that interpret input they do not
+control. It also selects `audit-memory` when the parser includes first-party C,
+C++ or unsafe Rust, `audit-exfil` when the parser itself resolves external
+entities, includes or URLs named by the input and `audit-injection` when it
+deserializes input into arbitrary types or evaluates it. Extracting archive
+entries to disk stays with `audit-file-parser`. A project that only calls a
+parser library on its own files, depends on a format library or ships sample
+files does not activate it. Checking a network protocol parser against its
+RFC is out of scope. A web service that parses uploads can activate both this
+mode and `web-api` while the shared audits are still enqueued once. The audit
+distinguishes source-proven vulnerabilities from intended behavior and
+evidenced negative results. Limits set by the deploying application, memory
+caps and sandboxing are recorded as unresolved assumptions. Its CWE references
+do not imply certification.
 
 Add another mode by defining its detection criteria in the triage reference
 and bundling its audit skill and threat model.
