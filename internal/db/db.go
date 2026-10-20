@@ -2150,6 +2150,40 @@ type SBOMPackage struct {
 	CreatedAt time.Time
 }
 
+// purlIndexMaxLen bounds SBOMPackage.PURL. The column carries a plain btree
+// index (idx_sbom_packages_p_url), and Postgres reports an over-long index
+// entry through two different ceilings, both SQLSTATE 54000 — which is worth
+// writing down, because the louder of the two is not the binding one:
+//
+//	index row requires 32344 bytes, maximum size is 8191
+//	index row size 5616 exceeds btree version 4 maximum 2704 for index …
+//
+// 8191 is the absolute index-tuple ceiling (INDEX_SIZE_MASK) and only fires
+// for a truly enormous value; the limit that actually binds is BTMaxItemSize,
+// a third of an 8kB page = 2704 bytes, and a 5616-byte purl fails on that
+// alone. So the cap must clear 2704, not 8191 — both errors were seen on this
+// index, in that order, and sizing to the first number would have left the
+// second to keep failing.
+//
+// Either way the insert aborts the whole snapshot, and with it the dependency
+// rows written in the same transaction. A real package URL is a few hundred
+// bytes at most, so anything past this bound is malformed input from the
+// document rather than data worth failing a scan over. SQLite has no such
+// limit; the cap is applied on both backends so a row means the same thing
+// either way.
+const purlIndexMaxLen = 1024
+
+// TruncatePURL bounds purl to what the indexed column accepts, cutting on a
+// rune boundary so the result stays valid UTF-8 (Postgres rejects a text
+// value that ends in a split rune). Returns the input unchanged when it
+// already fits, and reports whether it had to cut.
+func TruncatePURL(purl string) (string, bool) {
+	if len(purl) <= purlIndexMaxLen {
+		return purl, false
+	}
+	return strings.ToValidUTF8(purl[:purlIndexMaxLen], ""), true
+}
+
 // CNA is a CVE Numbering Authority from the public cve.org partner list.
 // Stored so the disclosure workflow can route a finding to the CNA whose
 // scope covers the project rather than (or in addition to) the maintainer.

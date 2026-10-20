@@ -96,10 +96,14 @@ func (s *Server) sbomUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	scope := doc.ClassifyScope()
 	for _, p := range doc.Packages {
+		// Bounded for the same reason as the generated path: the indexed
+		// p_url column cannot take an arbitrarily long value on Postgres,
+		// and one malformed component must not reject the whole upload.
+		purl, _ := db.TruncatePURL(p.PURL())
 		up.Packages = append(up.Packages, db.SBOMPackage{
 			Name:      p.Name,
 			Version:   p.Version,
-			PURL:      p.PURL(),
+			PURL:      purl,
 			Ecosystem: purlType(p.PURL()),
 			License:   firstNonEmpty(p.LicenseDeclared, p.LicenseConcluded),
 			Scope:     scope[p.ID],

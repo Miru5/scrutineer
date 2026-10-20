@@ -410,10 +410,14 @@ func (w *Worker) parseDependenciesOutput(scan *db.Scan, report string, emit func
 	w.resolveMavenDependencyRequirements(scan, inv.Result, emit)
 	rows := dependencyRows(scan.RepositoryID, inv.Result)
 
-	up, sbomErr := buildGeneratedSBOM(scan, env)
+	up, truncatedPURLs, sbomErr := buildGeneratedSBOM(scan, env)
 	if sbomErr != nil {
 		// A malformed sbom section should not discard a valid inventory.
 		emit(Event{Kind: KindText, Text: "sbom section skipped: " + sbomErr.Error()})
+	}
+	if truncatedPURLs > 0 {
+		emit(Event{Kind: KindText, Text: fmt.Sprintf(
+			"%d component(s) reported an over-long purl, stored truncated", truncatedPURLs)})
 	}
 
 	// Replace the prior row set and move the Current flag atomically so a
@@ -516,20 +520,20 @@ type analysisSection struct {
 // (nil, nil); a section that reported an error, or a document that fails to
 // parse, returns that error for the caller to log. Either way the caller
 // writes inventory rows without a snapshot.
-func buildGeneratedSBOM(scan *db.Scan, env dependencyEnvelope) (*db.SBOMUpload, error) {
+func buildGeneratedSBOM(scan *db.Scan, env dependencyEnvelope) (*db.SBOMUpload, int, error) {
 	sec := env.Analyses.SBOM
 	if sec.Status != analysisOK {
 		if sec.Error != "" {
-			return nil, errors.New(sec.Error)
+			return nil, 0, errors.New(sec.Error)
 		}
-		return nil, nil
+		return nil, 0, nil
 	}
 	if len(sec.Result) == 0 || string(sec.Result) == "{}" || string(sec.Result) == "null" {
-		return nil, nil
+		return nil, 0, nil
 	}
 	doc, err := sbom.Parse(sec.Result)
 	if err != nil {
-		return nil, fmt.Errorf("parse cyclonedx: %w", err)
+		return nil, 0, fmt.Errorf("parse cyclonedx: %w", err)
 	}
 	commit := env.Commit
 	if commit == "" {
@@ -547,22 +551,31 @@ func buildGeneratedSBOM(scan *db.Scan, env dependencyEnvelope) (*db.SBOMUpload, 
 		PackageCount: len(doc.Packages),
 	}
 	scope := doc.ClassifyScope()
+	truncatedPURLs := 0
 	for _, p := range doc.Packages {
 		purl := p.PURL()
 		lic := p.LicenseDeclared
 		if lic == "" {
 			lic = p.LicenseConcluded
 		}
+		// Derive the ecosystem from the full value, then store the bounded
+		// one: an over-long purl is malformed, but it must not take the
+		// whole snapshot (and the scan's dependency rows) down with it.
+		eco := db.EcosystemType(purl, "")
+		purl, cut := db.TruncatePURL(purl)
+		if cut {
+			truncatedPURLs++
+		}
 		up.Packages = append(up.Packages, db.SBOMPackage{
 			Name:      p.Name,
 			Version:   p.Version,
 			PURL:      purl,
-			Ecosystem: db.EcosystemType(purl, ""),
+			Ecosystem: eco,
 			License:   lic,
 			Scope:     scope[p.ID],
 		})
 	}
-	return &up, nil
+	return &up, truncatedPURLs, nil
 }
 
 func shortCommit(s string) string {
