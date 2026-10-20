@@ -472,6 +472,48 @@ func (w *Worker) scanWorkRoot(scan *db.Scan) string {
 	return w.workRoot(workspaceScanID(scan))
 }
 
+// cleanupScanWorkspace removes a finished scan's workspace, once nothing else
+// still needs the tree.
+//
+// The workspace is keyed by the resume lineage root, not by scan id
+// (workspaceScanID), so a retry finds the original run's source tree. That
+// makes a bare delete on terminal unsafe: a scan can reach a terminal status
+// while a resume of the same lineage is still queued or paused, and removing
+// the tree out from under it would leave the resumed harness with no source.
+// So the delete is gated on no *other* scan sharing this workspace being
+// queued, running or paused — this scan itself is excluded, since it is
+// terminal by the time we are called and its own row may not be visible as
+// such to a concurrent worker yet.
+//
+// The harness state directory is deliberately untouched: clearSessionStore
+// already drops it on an ordinary "done", and a failed or max-turns scan
+// keeps it so a retry can --resume. Shedding the workspace while keeping that
+// state is what sweepOrphanScanArtifacts does for a resumable terminal scan,
+// and this is the same trade on the hot path.
+func (w *Worker) cleanupScanWorkspace(scan *db.Scan) {
+	if w.DB == nil || w.DataDir == "" {
+		return
+	}
+	lineage := workspaceScanID(scan)
+	var active int64
+	if err := w.DB.Model(&db.Scan{}).
+		Where("(id = ? OR resumed_from_scan_id = ?) AND id <> ? AND status IN ?",
+			lineage, lineage, scan.ID,
+			[]db.ScanStatus{db.ScanQueued, db.ScanRunning, db.ScanPaused}).
+		Count(&active).Error; err != nil {
+		// Leave the tree rather than risk deleting one still in use; the
+		// startup sweep reaps it once the lineage is settled.
+		w.Log.Warn("workspace cleanup check failed", "scan", scan.ID, "err", err)
+		return
+	}
+	if active > 0 {
+		return
+	}
+	if rmErr := removeAllForce(w.workRoot(lineage)); rmErr != nil {
+		w.Log.Warn("workspace cleanup failed", "scan", scan.ID, "err", rmErr)
+	}
+}
+
 // harnessStateDir is the host directory holding the active harness's
 // session store for this scan's lineage. The container runner mounts it
 // at /harness-state and points the harness at it via StateEnv, so the
@@ -507,8 +549,8 @@ func (w *Worker) harnessStateDirID(scanID uint) string {
 // that was never created.
 func (w *Worker) RemoveScanArtifacts(scanID uint) error {
 	return errors.Join(
-		os.RemoveAll(w.workRoot(scanID)),
-		os.RemoveAll(w.harnessStateDirID(scanID)),
+		removeAllForce(w.workRoot(scanID)),
+		removeAllForce(w.harnessStateDirID(scanID)),
 	)
 }
 
@@ -981,9 +1023,7 @@ func (w *Worker) finalizeScan(ctx context.Context, scan *db.Scan, report string,
 		w.refreshRepoDiskUsage(scan.RepositoryID)
 	}
 	if scan.Status.Terminal() {
-		if rmErr := os.RemoveAll(w.scanWorkRoot(scan)); rmErr != nil {
-			w.Log.Warn("workspace cleanup failed", "scan", scan.ID, "err", rmErr)
-		}
+		w.cleanupScanWorkspace(scan)
 	}
 	w.publish(scan.ID, scan.RepositoryID, "scan-status", string(scan.Status))
 	w.Log.Info("job finished", "scan", scan.ID, "kind", scan.Kind, "status", scan.Status)

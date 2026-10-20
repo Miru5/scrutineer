@@ -21,7 +21,10 @@ import (
 // would let a link it planted turn any of those writes into a write elsewhere
 // on the host.
 func resetWorkspace(workRoot string) error {
-	if err := os.RemoveAll(workRoot); err != nil {
+	// removeAllForce, not os.RemoveAll: a previous run's Go module cache
+	// leaves read-only directories that plain removal cannot unlink, which
+	// surfaced as "reset work: unlinkat …/gopath/pkg/mod/…".
+	if err := removeAllForce(workRoot); err != nil {
 		return err
 	}
 	return os.MkdirAll(workRoot, dirPerm)

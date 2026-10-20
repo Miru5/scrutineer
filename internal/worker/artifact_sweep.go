@@ -1,15 +1,54 @@
 package worker
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"scrutineer/internal/db"
 )
+
+// DefaultArtifactSweepInterval is how often StartArtifactSweep runs a pass.
+// Looser than the reaper's five minutes: the hot-path cleanup in
+// finalizeScan is what keeps disk flat under normal operation, and this loop
+// only has to catch what dies before reaching it.
+const DefaultArtifactSweepInterval = 30 * time.Minute
+
+// StartArtifactSweep runs sweepOrphanScanArtifacts every `every`
+// (DefaultArtifactSweepInterval when zero) until ctx ends.
+//
+// Register runs one pass at startup, which is all there was: a worker that
+// stays up for days accumulated every workspace belonging to a scan killed
+// before finalizeScan, and only a restart reclaimed them. The disk that filled
+// on 2026-10-16 had been up since the previous deploy. The first pass here is
+// Register's, so this waits an interval before its own.
+func (w *Worker) StartArtifactSweep(ctx context.Context, every time.Duration) {
+	if every <= 0 {
+		every = DefaultArtifactSweepInterval
+	}
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		if removed, err := w.sweepOrphanScanArtifacts(); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			w.Log.Warn("orphan scan artifact sweep failed", "removed", removed, "err", err)
+		} else if removed > 0 {
+			w.Log.Info("removed orphan scan artifacts", "count", removed)
+		}
+	}
+}
 
 // sweepOrphanScanArtifacts removes workspaces left behind when a process exits
 // before finalizeScan reaches its terminal cleanup. A workspace that still
@@ -48,7 +87,7 @@ func (w *Worker) sweepOrphanScanArtifacts() (int, error) {
 		}
 		var removeErr error
 		if preserveState {
-			removeErr = os.RemoveAll(w.workRoot(scanID))
+			removeErr = removeAllForce(w.workRoot(scanID))
 		} else {
 			removeErr = w.RemoveScanArtifacts(scanID)
 		}
