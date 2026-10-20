@@ -23,6 +23,7 @@ import (
 	"gorm.io/gorm"
 
 	"scrutineer/internal/db"
+	"scrutineer/internal/web"
 )
 
 // auditIncompleteExitCode is the exit status of an audit that wrote its
@@ -165,7 +166,7 @@ func parseAuditFlags(args []string) (*flags, *auditOptions, error) {
 	fs.StringVar(&opts.source, "source", "", "directory to audit (required)")
 	fs.StringVar(&opts.out, "out", "", "directory to write results to (required)")
 	fs.DurationVar(&opts.timeout, "audit-timeout", 0, "wall-clock limit for the whole audit (0 = no limit)")
-	fs.StringVar(&opts.model, "model", "", "default model for the audit's scans")
+	fs.StringVar(&opts.model, "model", "", "model for every scan in the audit, whatever model tier its skill declares")
 	fs.StringVar(&f.trustedModelHost, "trusted-model-host", "",
 		"hostname of a model proxy on a private container network that may be reached over plain http, such as OSS-CRS's LiteLLM")
 	if err := fs.Parse(args); err != nil {
@@ -249,7 +250,8 @@ func prepareAuditData(f *flags, log *slog.Logger) (func(), error) {
 
 // isolateAuditConfig applies the settings that must win over the config file:
 // sqlite in the audit's own data dir, no ecosystems lookups plus the -model
-// override.
+// override. -model becomes the only entry in the pick list, so every tier a
+// skill declares resolves to it and a model proxy needs to serve just that one.
 func isolateAuditConfig(f *flags, opts *auditOptions, log *slog.Logger) {
 	if f.dbDriver != "" || f.dbDSN != "" {
 		log.Info("audit ignores the configured database and uses sqlite in its data dir", "driver", f.dbDriver)
@@ -258,6 +260,7 @@ func isolateAuditConfig(f *flags, opts *auditOptions, log *slog.Logger) {
 	f.dbDSN = ""
 	f.ecosystemsEnrichment = false
 	if opts.model != "" {
+		web.SetModels([]web.Model{{Name: opts.model, ID: opts.model}})
 		f.defaultModel = opts.model
 	}
 }
@@ -334,6 +337,7 @@ func shutdownAuditServer(srv *http.Server) {
 func cancelRunningScans(a *app, repoID uint, reason string) {
 	var ids []uint
 	if err := a.db.Model(&db.Scan{}).Where("repository_id = ? AND status = ?", repoID, db.ScanRunning).Pluck("id", &ids).Error; err != nil {
+		a.server.Log.Error("list running scans to cancel; they will record the default cancellation reason", "repo", repoID, "err", err)
 		return
 	}
 	for _, id := range ids {

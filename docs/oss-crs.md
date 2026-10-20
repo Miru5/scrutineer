@@ -32,7 +32,7 @@ llm_config:
       config_path: ./litellm-config.yaml
 ```
 
-`litellm-config.yaml` must list every model Scrutineer asks for. The default model is `claude-opus-4-6`. A different `SCRUTINEER_MODEL` must be in this list too. Claude Code also uses a background model, which the entrypoint defaults to `SCRUTINEER_MODEL`, so that name has to resolve as well.
+`litellm-config.yaml` must list every model Scrutineer asks for. `SCRUTINEER_MODEL` becomes the only model the audit knows, so every skill runs on it whatever model tier it declares. Claude Code's background model also defaults to `SCRUTINEER_MODEL`, so with it set the one entry below is enough. Without `SCRUTINEER_MODEL`, skills use the harness's model for each tier (`claude-opus-4-6` for high, `claude-sonnet-4-6` for mid and `claude-opus-5` for max) plus Claude Code's own background model. The list must then name all of them.
 
 ```yaml
 model_list:
@@ -56,7 +56,7 @@ The entrypoint points `ANTHROPIC_BASE_URL` at `OSS_CRS_LLM_API_URL`, reads the p
 
 | Variable | Default | Effect |
 |---|---|---|
-| `SCRUTINEER_MODEL` | Scrutineer's default | Model for the audit's scans. Also the default for `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
+| `SCRUTINEER_MODEL` | the harness's tier models | Model for every scan in the audit, whatever tier its skill declares. Also the default for `ANTHROPIC_DEFAULT_HAIKU_MODEL` |
 | `SCRUTINEER_AUDIT_TIMEOUT` | none | Wall-clock limit for the whole audit (`-audit-timeout`), for example `50m` |
 | `SCRUTINEER_CONCURRENCY` | Scrutineer's default | Scans run in parallel (`-concurrency`) |
 | `SCRUTINEER_AUDIT_USER` | `runner` | User the audit drops to when the container starts as root |
@@ -106,7 +106,7 @@ It accepts every server flag plus:
 | `-source` | required | Directory to audit. Copied per scan, so it can be read-only |
 | `-out` | required | Directory the results are written to |
 | `-audit-timeout` | `0` | Wall-clock limit for the whole audit, `0` for none |
-| `-model` | server default | Default model for the audit's scans, overriding the config file |
+| `-model` | the harness's tier models | Model for every scan in the audit, whatever tier its skill declares. Overrides the config file's `models:` list |
 | `-trusted-model-host` | none | Hostname of a model proxy on a private container network that may be reached over plain http, such as OSS-CRS's LiteLLM |
 
 `-trusted-model-host` relaxes the https requirement for that one hostname only. Every other model URL still has to use https unless it is loopback.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 
 	"scrutineer/internal/config"
 	"scrutineer/internal/db"
+	"scrutineer/internal/web"
 	"scrutineer/internal/worker"
 )
 
@@ -308,5 +310,69 @@ func TestAudit_flagValidation(t *testing.T) {
 				t.Errorf("runAuditWith(%v) = nil, want an error", args)
 			}
 		})
+	}
+}
+
+// TestAudit_modelPinsEveryTier runs an audit with a -model no harness lists, as
+// a LiteLLM alias would be. Triage queues a mid-tier and a max-tier skill
+// through the skill API the way the agent does. Both must run on -model
+// rather than on the harness's tier models.
+func TestAudit_modelPinsEveryTier(t *testing.T) {
+	h := newAuditHarness(t)
+	saved := web.Models
+	t.Cleanup(func() { web.Models = saved })
+	src, _ := auditSource(t)
+	outDir := filepath.Join(t.TempDir(), "out")
+	const pinned = "litellm-proxy-model"
+	tiered := map[string]string{"repo-overview": web.ModelTierMid, "investigate": web.ModelTierMax}
+
+	var apiBase string
+	var mu sync.Mutex
+	ran := map[string]string{}
+	fake := auditFakeRunner{behave: func(ctx context.Context, sj worker.SkillJob) (worker.SkillResult, error) {
+		mu.Lock()
+		ran[sj.Name] = sj.Model
+		mu.Unlock()
+		if sj.Name != "triage" {
+			return worker.SkillResult{Report: "{}"}, nil
+		}
+		gdb := h.db().db
+		var scan db.Scan
+		if err := gdb.First(&scan, sj.ScanID).Error; err != nil {
+			return worker.SkillResult{}, err
+		}
+		for name, tier := range tiered {
+			var sk db.Skill
+			if err := gdb.Where("name = ?", name).First(&sk).Error; err != nil || sk.Model != tier {
+				return worker.SkillResult{}, fmt.Errorf("skill %s declares model %q (err %v), want tier %s", name, sk.Model, err, tier)
+			}
+			url := fmt.Sprintf("%s/repositories/%d/skills/%s/run", apiBase, sj.Repo.ID, name)
+			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+			if err != nil {
+				return worker.SkillResult{}, err
+			}
+			req.Header.Set("Authorization", "Bearer "+scan.APIToken)
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				return worker.SkillResult{}, err
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode >= http.StatusBadRequest {
+				return worker.SkillResult{}, fmt.Errorf("run %s: status %d", name, resp.StatusCode)
+			}
+		}
+		return worker.SkillResult{Report: "{}"}, nil
+	}}
+	setup := func(f *flags, _ *config.Config, _ *slog.Logger) (worker.SkillRunner, string, error) {
+		apiBase = hostAPIBase(f.addr)
+		return fake, apiBase, nil
+	}
+	if err := runAuditWith(auditArgs(src, outDir, "-model", pinned), &bytes.Buffer{}, setup); err != nil {
+		t.Fatalf("runAuditWith: %v", err)
+	}
+	for _, name := range []string{"triage", "repo-overview", "investigate"} {
+		if got, ok := ran[name]; !ok || got != pinned {
+			t.Errorf("%s ran=%v model=%q, want %q", name, ok, got, pinned)
+		}
 	}
 }
