@@ -24,7 +24,7 @@ ARG SEMGREP_VERSION=1.180.0
 ARG BANDIT_VERSION=1.9.4
 ARG DARNIT_VERSION=0.1.1
 
-FROM golang:1.27.2-trixie@sha256:e58d6f83b3416618d8bcac2b3dde1b7f7e3c4a77d25e88637f8bbae81536c48d AS go-tools
+FROM golang:1.27.3-trixie@sha256:1896654cfc5c2b5ad74c07f29cb36f5d2d1cbed42e3054070fbfe444e521e83c AS go-tools
 
 COPY scripts/retry-build-command.sh /usr/local/bin/retry-build-command.sh
 # Go proxy/checksum requests can fail transiently.
@@ -40,7 +40,7 @@ RUN cargo install --locked --root /out zizmor@1.30.1
 # The runner image carries the proxy commands used by Scrutineer and by
 # harness/container consumers. Both are built CGO-free so they can be copied
 # into the slim runtime without a glibc dependency.
-FROM golang:1.27.2-trixie@sha256:e58d6f83b3416618d8bcac2b3dde1b7f7e3c4a77d25e88637f8bbae81536c48d AS scrutineer-build
+FROM golang:1.27.3-trixie@sha256:1896654cfc5c2b5ad74c07f29cb36f5d2d1cbed42e3054070fbfe444e521e83c AS scrutineer-build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
