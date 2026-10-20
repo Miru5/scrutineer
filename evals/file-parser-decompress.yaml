@@ -1,0 +1,13 @@
+given: a document reader inflates compressed elements with no bound on the decompressed size
+fixture: fixtures/file-parser-format
+skill: audit-file-parser
+should_find:
+  - path: tlvdoc/reader.py
+    evidence_contains:
+      - read_compressed
+      - decompress
+    required: true
+should_not_find:
+  - path: tlvdoc/bundle.py
+    evidence_contains:
+      - extract_bundle
