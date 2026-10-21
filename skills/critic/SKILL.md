@@ -8,7 +8,7 @@ metadata:
   scrutineer.output_file: report.json
   scrutineer.output_kind: critic
   scrutineer.model: mid
-  scrutineer.max_turns: 10
+  scrutineer.max_turns: 50
 ---
 
 # critic

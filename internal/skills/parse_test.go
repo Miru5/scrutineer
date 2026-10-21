@@ -1028,7 +1028,7 @@ func TestBundledReconPipelineMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse recon: %v", err)
 	}
-	if recon.OutputKind != "freeform" || recon.MaxTurns != 30 || recon.Model != "mid" {
+	if recon.OutputKind != "freeform" || recon.MaxTurns != 50 || recon.Model != "mid" {
 		t.Errorf("recon metadata = kind %q, turns %d, model %q", recon.OutputKind, recon.MaxTurns, recon.Model)
 	}
 	if !strings.Contains(recon.AllowedTools, "Write") || !strings.Contains(recon.AllowedTools, "Grep") {
@@ -1044,6 +1044,21 @@ func TestBundledReconPipelineMetadata(t *testing.T) {
 	}
 	if !threatModel.RecurseSubmodules {
 		t.Error("threat-model should receive initialized submodules")
+	}
+	// 30 (the default) truncated large repositories to an empty model, which
+	// every dependent then failed on (capella-studio, 2026-10-21).
+	if threatModel.MaxTurns != 60 {
+		t.Errorf("threat-model max_turns = %d, want 60", threatModel.MaxTurns)
+	}
+
+	// reflect reads the repository's threat model; declaring it lets the gate
+	// and the prerequisite restart see the dependency (see db.UsableDone).
+	reflect, err := ParseFile(filepath.Join("..", "..", "skills", "reflect", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("parse reflect: %v", err)
+	}
+	if !slices.Equal(reflect.Requires, []string{"threat-model"}) {
+		t.Errorf("reflect requires = %v, want [threat-model]", reflect.Requires)
 	}
 }
 

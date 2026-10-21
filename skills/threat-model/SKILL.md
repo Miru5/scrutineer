@@ -7,6 +7,7 @@ metadata:
   scrutineer.version: 1
   scrutineer.output_file: report.json
   scrutineer.output_kind: threat_model
+  scrutineer.max_turns: 60
   scrutineer.recurse_submodules: true
   scrutineer.requires:
     - recon
