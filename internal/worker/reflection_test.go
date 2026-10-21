@@ -290,3 +290,38 @@ func TestReflectionRetryUsesFrozenSnapshot(t *testing.T) {
 		})
 	}
 }
+
+// reflect waits for a threat-model that is still being re-run instead of
+// failing on the model's absence: the declared prerequisite is checked before
+// reflect reads the repository's model. The live case (2026-10-21): a retry
+// restarted capella-studio's empty threat-model, and the retried reflect,
+// checked first for the model, failed on "produced none" seconds later.
+func TestPreflightReflectionWaitsForRunningThreatModel(t *testing.T) {
+	w, scan, _ := reflectionFixture(t)
+	if err := w.DB.Model(&db.Repository{}).Where("id = ?", scan.RepositoryID).Update("threat_model", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := w.DB.Model(&db.Skill{}).Where("id = ?", scan.SkillID).Update("requires", "threat-model").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := w.DB.Create(&db.Skill{Name: "threat-model", Description: "d", Body: "b", Active: true,
+		Source: "ui", Version: 1, OutputFile: "report.json", OutputKind: "threat_model"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	tm := db.Scan{RepositoryID: scan.RepositoryID, Kind: JobSkill, SkillName: "threat-model",
+		Status: db.ScanRunning, StatusPriority: db.StatusPriorityFor(db.ScanRunning)}
+	if err := w.DB.Create(&tm).Error; err != nil {
+		t.Fatal(err)
+	}
+	deferred, err := w.preflightSkill(t.Context(), scan, 0)
+	if err != nil || !deferred {
+		t.Fatalf("deferred=%v err=%v, want reflect to wait for the threat-model", deferred, err)
+	}
+	var got db.Scan
+	if err := w.DB.First(&got, scan.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Status == db.ScanFailed {
+		t.Fatalf("reflect failed (%q) while its threat-model was still running", got.Error)
+	}
+}

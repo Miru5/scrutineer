@@ -48,6 +48,22 @@ func (w *Worker) preflightSkill(ctx context.Context, scan *db.Scan, attempt int)
 	if err := w.DB.First(&skill, *scan.SkillID).Error; err != nil {
 		return false, fmt.Errorf("load skill %d for preflight: %w", *scan.SkillID, err)
 	}
+	// The declared prerequisites first, then reflect's own checks. reflect
+	// requires threat-model and reads the repository's model; checked the
+	// other way round, a threat model still being re-run (by a retry's
+	// prerequisite restart) failed reflect on "produced none" instead of
+	// waiting for it.
+	if requires := skills.SplitPatterns(skill.Requires); len(requires) > 0 {
+		pending, dead := w.unsatisfiedPrereqs(scan, requires)
+		if len(dead) > 0 {
+			w.failScanPrereqs(scan, skill.Name,
+				fmt.Sprintf("prereqs failed: %v", dead), dead)
+			return true, nil
+		}
+		if len(pending) > 0 {
+			return w.deferSkillPrereqs(ctx, scan, &skill, attempt, pending)
+		}
+	}
 	if skill.Name == "reflect" {
 		pending, err := w.prepareReflection(scan)
 		if err != nil {
@@ -58,20 +74,7 @@ func (w *Worker) preflightSkill(ctx context.Context, scan *db.Scan, attempt int)
 			return w.deferSkillPrereqs(ctx, scan, &skill, attempt, []string{"triage cohort"})
 		}
 	}
-	requires := skills.SplitPatterns(skill.Requires)
-	if len(requires) == 0 {
-		return false, nil
-	}
-	pending, dead := w.unsatisfiedPrereqs(scan, requires)
-	if len(dead) > 0 {
-		w.failScanPrereqs(scan, skill.Name,
-			fmt.Sprintf("prereqs failed: %v", dead), dead)
-		return true, nil
-	}
-	if len(pending) == 0 {
-		return false, nil
-	}
-	return w.deferSkillPrereqs(ctx, scan, &skill, attempt, pending)
+	return false, nil
 }
 
 func (w *Worker) deferSkillPrereqs(ctx context.Context, scan *db.Scan, skill *db.Skill, attempt int, pending []string) (bool, error) {
