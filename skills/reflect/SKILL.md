@@ -10,6 +10,8 @@ metadata:
   scrutineer.output_kind: reflection
   scrutineer.max_turns: 8
   scrutineer.model: mid
+  scrutineer.requires:
+    - threat-model
 ---
 
 # reflect

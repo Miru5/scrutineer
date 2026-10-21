@@ -95,7 +95,8 @@ func (s *Server) prereqNames(skillName string) []string {
 }
 
 // prereqFailedOnRepo reports whether the named skill's latest scans on the
-// repository are terminal-failed with no completion and nothing in flight —
+// repository are terminal-failed with no usable completion (db.UsableDone)
+// and nothing in flight —
 // the "dead" state the worker's prereq gate fails a dependent on. False when a
 // scan is done (satisfied), one is queued/running/paused (already restarting),
 // or none exists at all (never part of this repo's pipeline).
@@ -107,8 +108,10 @@ func (s *Server) prereqFailedOnRepo(repoID uint, skillName string) bool {
 		return false
 	}
 	var done int64
-	s.DB.Model(&db.Scan{}).Where("repository_id = ? AND skill_name = ? AND status = ?",
-		repoID, skillName, db.ScanDone).Count(&done)
+	// Usable completions only: a done scan the turn cap cut off with no
+	// report is restarted like a failed one (see db.UsableDone).
+	s.DB.Model(&db.Scan{}).Where("repository_id = ? AND skill_name = ?",
+		repoID, skillName).Scopes(db.UsableDone).Count(&done)
 	if done > 0 {
 		return false
 	}

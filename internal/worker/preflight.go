@@ -215,7 +215,7 @@ func (w *Worker) prereqStatus(where string, args []any, inFlight []db.ScanStatus
 		return prereqAbsent
 	}
 	var done int64
-	w.DB.Model(&db.Scan{}).Where(where, args...).Where("status = ?", db.ScanDone).Count(&done)
+	w.DB.Model(&db.Scan{}).Where(where, args...).Scopes(db.UsableDone).Count(&done)
 	if done > 0 {
 		return prereqSatisfied
 	}

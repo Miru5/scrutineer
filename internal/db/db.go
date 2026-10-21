@@ -210,6 +210,21 @@ const (
 	ScanCancelled ScanStatus = "cancelled"
 )
 
+// UsableDone narrows a scan query to completions that produced something: done,
+// and not cut off by the turn cap before writing any report. A capped scan is
+// recorded as done (see worker.finishErroredScan) with whatever partial output
+// it had — often none — so counting every done row as a completion let an
+// empty threat model satisfy the prerequisite gate, and everything downstream
+// failed on its absence instead ("reflect requires a threat model, but this
+// triage's threat-model scan produced none"). The prerequisite gate
+// (worker.prereqStatus) and the prerequisite restart (web.prereqFailedOnRepo)
+// both count completions through this, so they keep agreeing on what "done"
+// means. An empty report alone is not enough: some skills finish with none
+// because their output lands elsewhere.
+func UsableDone(tx *gorm.DB) *gorm.DB {
+	return tx.Where("status = ? AND NOT (max_turns_hit AND COALESCE(report, '') = '')", ScanDone)
+}
+
 const (
 	ScanRescanModeFull = "full"
 	ScanRescanModeDiff = "diff"

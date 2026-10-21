@@ -386,6 +386,9 @@ func (s *Server) scanRetry(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "scan cannot be retried: no skill reference", http.StatusBadRequest)
 		return
 	}
+	// Dead prerequisites first, as the automatic retry does: retrying only
+	// the dependent would fail again on the same missing input.
+	s.restartFailedPrereqs(r.Context(), scan.RepositoryID, scan.SkillName, scan.ScanGroup)
 	sessionID, resumeOf := s.resumeOpts(scan)
 	newID, err := s.enqueueSkillWith(r.Context(), scan.RepositoryID, *scan.SkillID, ScanOpts{
 		AuditRetry:           true,
@@ -491,7 +494,7 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 	// deliberately absent: a user-cancelled newer run must not block retrying an
 	// older genuine failure.
 	var scans []db.Scan
-	err = q.Select("id, repository_id, skill_id, model, effort, finding_id, remediation_attempt_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, scan_group, focus_area, triage_scan_id, exploration_mode, exploration_path, backend, status, session_id, resumed_from_scan_id, import_payload, verification_feedback").
+	err = q.Select("id, repository_id, skill_id, skill_name, model, effort, finding_id, remediation_attempt_id, sub_path, scope_mode, ref, profile, rescan_mode, diff_base_scan_id, scan_group, focus_area, triage_scan_id, exploration_mode, exploration_path, backend, status, session_id, resumed_from_scan_id, import_payload, verification_feedback").
 		Where(`NOT EXISTS (
 			SELECT 1 FROM scans n
 			WHERE n.id > scans.id
@@ -515,6 +518,7 @@ func (s *Server) scansRetryFailed(w http.ResponseWriter, r *http.Request) {
 
 	var retried, errored int
 	for _, sc := range scans {
+		s.restartFailedPrereqs(r.Context(), sc.RepositoryID, sc.SkillName, sc.ScanGroup)
 		sessionID, resumeOf := s.resumeOpts(sc)
 		parent := sc.ID
 		if _, err := s.enqueueSkillWith(r.Context(), sc.RepositoryID, *sc.SkillID, ScanOpts{
@@ -611,7 +615,10 @@ func (s *Server) bulkResumePaused(base *gorm.DB) ([]db.Scan, error) {
 		// Opted-out repositories are excluded from both the read and the claim:
 		// recording an opt-out cancels the paused scans it finds, but a scan the
 		// worker pauses while that sweep runs would otherwise stay resumable.
-		if err := fleet.ScopeOwn(tx.Select("id", "repository_id", "kind", "finding_id", "error", "paused_until").
+		// skill_name and scan_group ride along for enqueueResumedScan's
+		// prerequisite restart, which does nothing without them.
+		if err := fleet.ScopeOwn(tx.Select("id", "repository_id", "kind", "finding_id", "error", "paused_until",
+			"skill_name", "scan_group").
 			Where("status = ?", db.ScanPaused).
 			Where("repository_id NOT IN (?)", s.optedOutRepoIDs())).
 			Find(&paused).Error; err != nil {
@@ -695,6 +702,12 @@ func (s *Server) queuedWithMessages(where string, args ...any) []db.Scan {
 }
 
 func (s *Server) enqueueResumedScan(ctx context.Context, scan db.Scan) error {
+	// A resumed scan meets the same prerequisite gate a retried one does, and
+	// a prerequisite that died (or finished empty) while it sat paused would
+	// fail it on arrival — so resume heals them the way retry does.
+	if scan.Kind == worker.JobSkill {
+		s.restartFailedPrereqs(ctx, scan.RepositoryID, scan.SkillName, scan.ScanGroup)
+	}
 	priority := worker.PrioScan
 	if scan.FindingID != nil {
 		priority = worker.PrioFinding
