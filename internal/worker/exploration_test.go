@@ -3,6 +3,8 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -421,5 +423,33 @@ func TestExplorationPrereqsAndRecipe(t *testing.T) {
 	}
 	if recipe.ThreatModelSHA256 == "" || recipe.ExplorationMode != ExplorationAdversarialSweep || recipe.ExplorationPath != "examples" {
 		t.Fatalf("wrong adversarial recipe: %s", raw)
+	}
+}
+
+// A checkout with no source directory to explore (an org's .github repo,
+// say) ends the exploratory scan skipped, not failed, so auto-retry leaves it.
+func TestExplorationWithNoSourceSkipsScan(t *testing.T) {
+	gdb := dbtest.Open(t)
+	work := t.TempDir()
+	writeDiffTestFile(t, filepath.Join(work, "src"), "README.md", "docs only")
+	repo := db.Repository{URL: "https://example.com/dotgithub"}
+	if err := gdb.Create(&repo).Error; err != nil {
+		t.Fatal(err)
+	}
+	scan := db.Scan{RepositoryID: repo.ID, SkillName: deepDiveSkillName, Status: db.ScanRunning, ExplorationMode: ExplorationRandomDig}
+	if err := gdb.Create(&scan).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := Worker{DB: gdb}
+	err := w.prepareExploration(t.Context(), work, &scan)
+	if !errors.Is(err, ErrNoExplorationTarget) {
+		t.Fatalf("err=%v, want ErrNoExplorationTarget", err)
+	}
+	finishErroredScan(&scan, "", fmt.Errorf("stage: %w", err), func(Event) {})
+	if scan.Status != db.ScanSkipped || scan.Error == "" {
+		t.Fatalf("status=%s error=%q, want skipped with a reason", scan.Status, scan.Error)
+	}
+	if !scan.Status.Terminal() {
+		t.Fatal("skipped must be terminal so a reflect waiting on the cohort proceeds")
 	}
 }

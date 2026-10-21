@@ -1136,6 +1136,9 @@ func finishErroredScan(scan *db.Scan, report string, err error, emit func(Event)
 	_, schemaValidation := errors.AsType[*SchemaValidationError](err)
 	_, accountErr := errors.AsType[*AccountError](err)
 	switch {
+	case errors.Is(err, ErrNoExplorationTarget):
+		scan.Status = db.ScanSkipped
+		emit(Event{Kind: KindText, Text: "scan skipped: " + scan.Error})
 	case maxTurns:
 		scan.Status = db.ScanDone
 		scan.Report = report

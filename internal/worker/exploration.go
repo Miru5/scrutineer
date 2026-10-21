@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -96,6 +97,12 @@ type skillContextExploration struct {
 // prepareExploration runs after all operator and skill path filters. Only
 // directories containing regular source files are candidates, never symlinks.
 // Persisting the chosen directory keeps explicit retries on the same target.
+// ErrNoExplorationTarget is an exploratory audit on a checkout with no source
+// directory to explore (a .github or docs-only repository). There is nothing
+// for the scan to do, so it ends skipped rather than failed: a failure would
+// be auto-retried against the same empty tree and counted as a fleet fault.
+var ErrNoExplorationTarget = errors.New("no eligible source directory for exploratory audit")
+
 func (w *Worker) prepareExploration(ctx context.Context, workRoot string, scan *db.Scan) error {
 	if scan.ExplorationMode == "" {
 		return nil
@@ -127,7 +134,7 @@ func (w *Worker) prepareRandomDig(ctx context.Context, workRoot string, scan *db
 		return fmt.Errorf("select exploratory source directory: %w", err)
 	}
 	if len(dirs) == 0 {
-		return fmt.Errorf("no eligible source directory for exploratory audit")
+		return ErrNoExplorationTarget
 	}
 	if scan.ExplorationPath != "" {
 		if !slices.Contains(dirs, scan.ExplorationPath) {
