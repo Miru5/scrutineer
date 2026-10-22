@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"strings"
 
 	"scrutineer/internal/db"
 )
@@ -149,5 +150,42 @@ func (s *Server) enqueueVerifyForFinding(ctx context.Context, f *db.Finding, pro
 	if err := s.enqueueFindingScopedSkillIfIdle(ctx, f.RepositoryID, f.ID, skill.ID, ScanOpts{Profile: profile}); err != nil {
 		s.Log.Warn("auto-chain verify after revalidate",
 			"finding", f.ID, "repo", f.RepositoryID, "skill", verifySkillName, "err", err)
+	}
+}
+
+// autoChainPatchAfterVerify is wired onto Worker.OnVerifyResult. A finding
+// verify confirmed on the default branch gets a patch proposal, so a report
+// filed for it can carry Scrutineer's fix. Only then: verify against an
+// explicit ref is the validate-fix flow re-checking a candidate fix, and a
+// finding that already holds a gated patch does not need another. The
+// patch's own open-scan guard (enqueueFindingScopedSkillIfIdle) keeps a
+// re-verify from stacking a second one.
+//
+// Errors are logged and swallowed; failing to chain must not roll back the
+// verify result.
+func (s *Server) autoChainPatchAfterVerify(scan *db.Scan, f *db.Finding, status string) {
+	if f == nil || status != "confirmed" {
+		return
+	}
+	if scan != nil && scan.Ref != "" {
+		return
+	}
+	var current db.Finding
+	if err := s.DB.Select("id, suggested_fix").First(&current, f.ID).Error; err == nil &&
+		strings.TrimSpace(current.SuggestedFix) != "" {
+		return
+	}
+	var skill db.Skill
+	if err := s.DB.Where("name = ? AND active = ?", patchSkillName, true).First(&skill).Error; err != nil {
+		return
+	}
+	var profile string
+	if scan != nil {
+		profile = scan.Profile
+	}
+	if err := s.enqueueFindingScopedSkillIfIdle(context.Background(), f.RepositoryID, f.ID, skill.ID,
+		ScanOpts{Profile: profile}); err != nil {
+		s.Log.Warn("auto-chain patch after verify",
+			"finding", f.ID, "repo", f.RepositoryID, "skill", patchSkillName, "err", err)
 	}
 }

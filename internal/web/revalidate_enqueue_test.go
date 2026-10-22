@@ -182,3 +182,58 @@ func TestAutoEnqueueRevalidate_doesNotDoubleQueueConcurrently(t *testing.T) {
 		t.Fatalf("queued revalidate scans = %d, want 1", queued)
 	}
 }
+
+func patchChainSetup(t *testing.T) (*Server, func(), db.Skill, *db.Finding) {
+	t.Helper()
+	s, done, _, newFinding := chainTestSetup(t)
+	patch := db.Skill{Name: "patch", OutputFile: "report.json", OutputKind: "patch", Version: 1, Active: true}
+	s.DB.Create(&patch)
+	return s, done, patch, newFinding("High")
+}
+
+func queuedPatches(s *Server, f *db.Finding, patch db.Skill) int64 {
+	var n int64
+	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ? AND status = ?",
+		f.ID, patch.ID, db.ScanQueued).Count(&n)
+	return n
+}
+
+func TestAutoChainPatch_confirmedEnqueuesPatchOnce(t *testing.T) {
+	s, done, patch, f := patchChainSetup(t)
+	defer done()
+	verify := db.Scan{RepositoryID: f.RepositoryID, Status: db.ScanDone, SkillName: "verify", Profile: "java"}
+	s.DB.Create(&verify)
+
+	s.autoChainPatchAfterVerify(&verify, f, "confirmed")
+	s.autoChainPatchAfterVerify(&verify, f, "confirmed") // a re-verify must not stack a second
+
+	if n := queuedPatches(s, f, patch); n != 1 {
+		t.Fatalf("queued patch scans = %d, want 1", n)
+	}
+	var derived db.Scan
+	s.DB.Where("finding_id = ? AND skill_id = ?", f.ID, patch.ID).First(&derived)
+	if derived.Profile != "java" {
+		t.Errorf("patch Profile = %q, want %q (carried from verify)", derived.Profile, "java")
+	}
+}
+
+func TestAutoChainPatch_skipsUnconfirmedRefScopedAndAlreadyPatched(t *testing.T) {
+	s, done, patch, f := patchChainSetup(t)
+	defer done()
+
+	for _, status := range []string{"fixed", "inconclusive", "deferred", "not_attempted"} {
+		s.autoChainPatchAfterVerify(nil, f, status)
+	}
+	fixRef := db.Scan{RepositoryID: f.RepositoryID, Status: db.ScanDone, SkillName: "verify", Ref: "fix-branch"}
+	s.DB.Create(&fixRef)
+	s.autoChainPatchAfterVerify(&fixRef, f, "confirmed")
+	if n := queuedPatches(s, f, patch); n != 0 {
+		t.Fatalf("queued patch scans = %d, want 0", n)
+	}
+
+	s.DB.Model(&db.Finding{}).Where("id = ?", f.ID).Update("suggested_fix", "diff --git a/x b/x\n")
+	s.autoChainPatchAfterVerify(nil, f, "confirmed")
+	if n := queuedPatches(s, f, patch); n != 0 {
+		t.Errorf("finding with a gated patch got %d new patch scans, want 0", n)
+	}
+}

@@ -473,6 +473,7 @@ func New(gdb *gorm.DB, q *queue.Queue, log *slog.Logger, broker *Broker, w *work
 	if w != nil {
 		w.OnFindingCreated = s.autoEnqueueRevalidate
 		w.OnRevalidateVerdict = s.autoChainVerifyAfterRevalidate
+		w.OnVerifyResult = s.autoChainPatchAfterVerify
 		w.OnScanFinalized = s.onScanFinalized
 		// Only the dedup pass, not the whole onScanFinalized fan-out: a scan
 		// that timed out or was cancelled has no committed analysis to update
