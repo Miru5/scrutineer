@@ -275,3 +275,40 @@ func TestAutoRetry_carriesVerificationFeedback(t *testing.T) {
 		t.Errorf("retry verification_feedback = %q, want it carried over", kid.VerificationFeedback)
 	}
 }
+
+func TestAutoRetry_cancellingTheRetryEndsTheLineage(t *testing.T) {
+	f, done := newAutoRetryFixture(t)
+	defer done()
+	lost := f.failed(t, 10*time.Minute, 0, worker.AbandonedPrefix+"no heartbeat")
+
+	if n := f.s.autoRetryTick(context.Background(), f.now); n != 1 {
+		t.Fatalf("retried %d, want 1", n)
+	}
+	kids := f.queuedChildren(t, lost.ID)
+	if len(kids) != 1 {
+		t.Fatalf("children = %d, want 1", len(kids))
+	}
+	f.s.DB.Model(&db.Scan{}).Where("id = ?", kids[0].ID).Update("status", db.ScanCancelled)
+
+	if n := f.s.autoRetryTick(context.Background(), f.now.Add(time.Hour)); n != 0 {
+		t.Errorf("after the retry was cancelled, retried %d, want 0", n)
+	}
+}
+
+func TestAutoRetry_unrelatedCancelDoesNotBlockRetry(t *testing.T) {
+	f, done := newAutoRetryFixture(t)
+	defer done()
+	lost := f.failed(t, 10*time.Minute, 0, worker.AbandonedPrefix+"no heartbeat")
+	// A newer run of the same tuple that someone cancelled, not a retry of it.
+	sc := db.Scan{RepositoryID: f.repo.ID, Kind: worker.JobSkill, SkillID: &f.skill.ID,
+		SkillName: f.skill.Name, Status: db.ScanCancelled,
+		StatusPriority: db.StatusPriorityFor(db.ScanCancelled)}
+	f.s.DB.Create(&sc)
+
+	if n := f.s.autoRetryTick(context.Background(), f.now); n != 1 {
+		t.Fatalf("retried %d, want 1", n)
+	}
+	if kids := f.queuedChildren(t, lost.ID); len(kids) != 1 {
+		t.Errorf("children = %d, want 1", len(kids))
+	}
+}

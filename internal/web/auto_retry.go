@@ -45,7 +45,8 @@ const retryScanColumns = "id, repository_id, skill_id, skill_name, model, effort
 // sub_path, ref, finding) tuple: a failure that already has a later attempt in
 // one of supersedingStatuses is not retried again. Cancelled is deliberately
 // absent from that list, so a user-cancelled newer run does not block retrying
-// an older genuine failure.
+// an older genuine failure. Cancelling the retry itself is different — see
+// retryCancelledSQL.
 const newestAttemptPerTupleSQL = `NOT EXISTS (
 			SELECT 1 FROM scans n
 			WHERE n.id > scans.id
@@ -55,6 +56,16 @@ const newestAttemptPerTupleSQL = `NOT EXISTS (
 			  AND COALESCE(n.ref, '') = COALESCE(scans.ref, '')
 			  AND COALESCE(n.finding_id, 0) = COALESCE(scans.finding_id, 0)
 			  AND n.status IN ?
+		)`
+
+// retryCancelledSQL ends a lineage once someone cancels one of its automatic
+// retries (a child carrying this scan as parent_scan_id). Without it the
+// cancelled child did not supersede the failure, so the next tick enqueued it
+// again: cancelling a retry restarted it two minutes later, for as long as the
+// failure sat inside the window (sif, 2026-10-22).
+const retryCancelledSQL = `NOT EXISTS (
+			SELECT 1 FROM scans c
+			WHERE c.parent_scan_id = scans.id AND c.status = ?
 		)`
 
 var supersedingStatuses = []db.ScanStatus{db.ScanQueued, db.ScanRunning, db.ScanDone, db.ScanFailed, db.ScanPaused}
@@ -95,7 +106,8 @@ func (s *Server) autoRetryTick(ctx context.Context, now time.Time) int {
 		Where("status = ? AND kind = ? AND skill_id IS NOT NULL", db.ScanFailed, worker.JobSkill).
 		Where("auto_retries < ?", s.AutoRetryMax).
 		Where("finished_at IS NOT NULL AND finished_at < ? AND finished_at > ?", now.Add(-base), now.Add(-autoRetryWindow)).
-		Where(newestAttemptPerTupleSQL, supersedingStatuses)).
+		Where(newestAttemptPerTupleSQL, supersedingStatuses).
+		Where(retryCancelledSQL, db.ScanCancelled)).
 		Order("id").Limit(autoRetryBatch).
 		Find(&scans).Error
 	if err != nil {
