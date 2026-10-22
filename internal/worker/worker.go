@@ -90,10 +90,6 @@ type Worker struct {
 	// post-adjustment severity: revalidate may have rated the finding lower
 	// than the original claim.
 	OnRevalidateVerdict func(scan *db.Scan, finding *db.Finding, verdict, severity string)
-	// OnVerifyResult, when non-nil, is called after parseVerifyOutput records
-	// a verify status on a finding. The web layer wires it up to enqueue the
-	// patch skill once verify confirms a finding on the default branch.
-	OnVerifyResult func(scan *db.Scan, finding *db.Finding, status string)
 	// OnScanFinalized, when non-nil, is called once after a scan finishes its
 	// analysis with findings committed and the worker has no further writes
 	// to make for the scan — that is, ScanDone or a fail_on-threshold
