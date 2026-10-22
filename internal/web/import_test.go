@@ -614,20 +614,21 @@ func TestAutoChainVerify_truePositiveHighEnqueuesVerify(t *testing.T) {
 	}
 }
 
-func TestAutoChainVerify_respectsAdjustedSeverity(t *testing.T) {
+func TestAutoChainVerify_verifiesEveryConfirmedSeverity(t *testing.T) {
 	s, done, verify, newFinding := chainTestSetup(t)
 	defer done()
-	// Finding's stored severity is High but the callback gets the
-	// post-adjustment Medium value, which must stop the chain.
-	f := newFinding("High")
-	s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "Medium")
-
-	var queued int64
-	s.DB.Model(&db.Scan{}).
-		Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).
-		Count(&queued)
-	if queued != 0 {
-		t.Errorf("queued = %d, want 0 (revalidate downgraded the severity)", queued)
+	// Revalidate confirmed it but rated it lower than the claim: still
+	// verified, so it can still get a patch.
+	for _, sev := range []string{"Medium", "Low"} {
+		f := newFinding("High")
+		s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", sev)
+		var queued int64
+		s.DB.Model(&db.Scan{}).
+			Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).
+			Count(&queued)
+		if queued != 1 {
+			t.Errorf("severity %s: queued = %d, want 1", sev, queued)
+		}
 	}
 }
 

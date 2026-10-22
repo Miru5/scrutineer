@@ -18,8 +18,8 @@ const revalidateSkillName = "revalidate"
 const criticSkillName = "critic"
 
 // verifySkillName is shared with server.go: the heavier
-// reproduction-running checker chained after revalidate when a
-// High/Critical finding is judged a true positive.
+// reproduction-running checker chained after revalidate when a finding is
+// judged a true positive.
 
 // autoEnqueueRevalidate is wired onto Worker.OnFindingCreated. The worker
 // calls it after persisting each fresh Finding row from a findings-emitting
@@ -95,13 +95,16 @@ func (s *Server) hasOpenScan(scope string, args ...any) bool {
 }
 
 // autoChainVerifyAfterRevalidate is wired onto Worker.OnRevalidateVerdict.
-// Every true positive gets the static release-viability critic. The expensive
-// reproduction-running verify remains limited to High/Critical findings.
-// These chains are independent: an absent critic does not suppress verify.
+// Every true positive gets the static release-viability critic and verify,
+// whatever severity revalidate left it at — verify used to stop at
+// High/Critical, so a finding revalidate confirmed but downgraded was never
+// reproduced, and never got the patch verify now chains to
+// (autoChainPatchAfterVerify). These chains are independent: an absent critic
+// does not suppress verify.
 //
 // Errors are logged and swallowed; failing to chain verify must not
 // roll back the revalidate verdict.
-func (s *Server) autoChainVerifyAfterRevalidate(scan *db.Scan, f *db.Finding, verdict, severity string) {
+func (s *Server) autoChainVerifyAfterRevalidate(scan *db.Scan, f *db.Finding, verdict, _ string) {
 	if f == nil {
 		return
 	}
@@ -119,9 +122,7 @@ func (s *Server) autoChainVerifyAfterRevalidate(scan *db.Scan, f *db.Finding, ve
 	}
 	ctx := context.Background()
 	s.enqueueCriticForFinding(ctx, f, profile)
-	if db.SeverityAtLeast(severity, "High") {
-		s.enqueueVerifyForFinding(ctx, f, profile)
-	}
+	s.enqueueVerifyForFinding(ctx, f, profile)
 }
 
 // enqueueCriticForFinding looks up the active critic skill and enqueues one
