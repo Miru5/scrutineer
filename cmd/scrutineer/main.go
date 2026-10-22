@@ -846,7 +846,6 @@ func run(log *slog.Logger) error {
 	go w.StartArtifactSweep(ctx, 0)
 	go srv.StartScheduler(ctx)
 	go srv.StartAutoRetry(ctx)
-	go srv.StartPatchBackfill(ctx)
 	go srv.StartRepositoryHealthScorer(ctx)
 	go srv.StartFederation(ctx)
 
