@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProfileByName(t *testing.T) {
@@ -643,4 +644,29 @@ func brakemanVersion(t *testing.T, dockerfile string) string {
 		return ""
 	}
 	return string(m[1])
+}
+
+func TestStaleProfileTags(t *testing.T) {
+	now := time.Now()
+	noteHandedOut("scrutineer-profile-java:recent00000")
+	listing := []string{
+		"scrutineer-profile-java:aaaaaaaaaaaa",
+		"scrutineer-profile-java:keep00000000",
+		"scrutineer-profile-java:recent00000",
+		"localhost/scrutineer-profile-java:bbbbbbbbbbbb",
+		"scrutineer-profile-java-maven:cccccccccccc", // another profile sharing the prefix
+		"scrutineer-profile-java:<none>",
+		"",
+	}
+	got := staleProfileTags(listing, "scrutineer-profile-java", "scrutineer-profile-java:keep00000000", now)
+	want := []string{"scrutineer-profile-java:aaaaaaaaaaaa", "localhost/scrutineer-profile-java:bbbbbbbbbbbb"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("staleProfileTags = %v, want %v", got, want)
+	}
+	// Past the grace period a handed-out tag is fair game again.
+	later := now.Add(handedOutGrace + time.Minute)
+	got = staleProfileTags(listing, "scrutineer-profile-java", "scrutineer-profile-java:keep00000000", later)
+	if len(got) != 3 {
+		t.Fatalf("after grace, staleProfileTags = %v, want 3 tags", got)
+	}
 }

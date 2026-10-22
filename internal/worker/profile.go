@@ -388,8 +388,9 @@ func lockForTag(tag string) *sync.Mutex {
 // transparently and the new image builds alongside the old. baseDigest is
 // empty when the digest can't be resolved (offline, or a local-only ref);
 // the tag then keys on the ref string alone, the behaviour before the
-// digest was folded in. Old tags stay cached until the operator prunes
-// them.
+// digest was folded in. A build prunes the profile's older tags that no
+// container uses (pruneStaleProfileTags); before that they stayed cached until
+// the operator pruned them, and filled the disk.
 func imageTag(profileName string, dockerfile []byte, runnerImage, baseDigest string) string {
 	h := sha256.New()
 	h.Write(dockerfile)
@@ -510,6 +511,7 @@ func (p Profile) EnsureImage(ctx context.Context, rt ContainerRuntime, profilesD
 				" but could not verify the runner base is current (" + runnerImage +
 				" digest unresolved); if it changed, `" + runtimeBin(rt) + " rmi " + tag + "` to force a rebuild"})
 		}
+		noteHandedOut(tag)
 		return tag, nil
 	}
 	emit(Event{Kind: KindText, Text: "profile: building " + tag + " (first build can take several minutes)"})
@@ -520,7 +522,87 @@ func (p Profile) EnsureImage(ctx context.Context, rt ContainerRuntime, profilesD
 		return "", fmt.Errorf("%s build %s: %w\n%s", runtimeBin(rt), tag, err, out)
 	}
 	emit(Event{Kind: KindText, Text: "profile: built " + tag + " in " + time.Since(start).Round(time.Second).String()})
+	noteHandedOut(tag)
+	if n := pruneStaleProfileTags(ctx, rt, p.Name, tag); n > 0 {
+		emit(Event{Kind: KindText, Text: fmt.Sprintf("profile: removed %d unused older %s image(s)", n, p.Name)})
+	}
 	return tag, nil
+}
+
+// handedOut records when EnsureImage last returned each tag. A scan holds
+// its tag between EnsureImage and the container start with no container yet
+// to pin it, so a tag handed out recently is not pruned even though the
+// runtime would let it go.
+var handedOut = struct {
+	sync.Mutex
+	m map[string]time.Time
+}{m: map[string]time.Time{}}
+
+// handedOutGrace is how long a handed-out tag is protected from pruning.
+// Generous: it only has to outlast the gap before `run`.
+const handedOutGrace = 2 * time.Hour
+
+func noteHandedOut(tag string) {
+	handedOut.Lock()
+	handedOut.m[tag] = time.Now()
+	handedOut.Unlock()
+}
+
+func recentlyHandedOut(tag string, now time.Time) bool {
+	handedOut.Lock()
+	defer handedOut.Unlock()
+	at, ok := handedOut.m[tag]
+	return ok && now.Sub(at) < handedOutGrace
+}
+
+// pruneStaleProfileTags removes the profile's older image tags after a new
+// one is built. Every runner :latest move or Dockerfile edit yields a new
+// content-addressed tag (imageTag) and the old ones were never removed: sif
+// held 74 profile images, 3 in use, at 98% disk (2026-10-22). `rmi` without
+// -f is the safety: the runtime refuses an image a container (running or
+// stopped) still uses, and a tag of a chained profile's base is untagged
+// while its layers stay with the child. Best-effort — a failure leaves the
+// image for the next build or the operator, never fails the scan. Returns
+// how many tags were removed. Apple's container CLI is skipped: its image
+// listing differs and it is a single-user desktop runtime.
+func pruneStaleProfileTags(ctx context.Context, rt ContainerRuntime, profileName, keep string) int {
+	if rt.Bin == runtimeApple {
+		return 0
+	}
+	repo := "scrutineer-profile-" + profileName
+	out, err := exec.CommandContext(ctx, runtimeBin(rt), "images",
+		"--format", "{{.Repository}}:{{.Tag}}", repo).Output()
+	if err != nil {
+		return 0
+	}
+	removed := 0
+	for _, tag := range staleProfileTags(strings.Split(string(out), "\n"), repo, keep, time.Now()) {
+		if exec.CommandContext(ctx, runtimeBin(rt), "rmi", tag).Run() == nil {
+			removed++
+		}
+	}
+	return removed
+}
+
+// staleProfileTags picks, from an image listing, the tags of repo other than
+// keep that this process has not handed out recently. Pure apart from the
+// handedOut map, so the selection is testable without a runtime.
+func staleProfileTags(listing []string, repo, keep string, now time.Time) []string {
+	var out []string
+	for _, line := range listing {
+		tag := strings.TrimSpace(line)
+		// podman lists local images under a localhost/ prefix.
+		name := strings.TrimPrefix(tag, "localhost/")
+		if !strings.HasPrefix(name, repo+":") || strings.HasSuffix(name, ":<none>") {
+			continue
+		}
+		if name == keep || strings.TrimPrefix(keep, "localhost/") == name ||
+			recentlyHandedOut(name, now) || recentlyHandedOut(tag, now) {
+			continue
+		}
+		out = append(out, tag)
+	}
+	return out
 }
 
 // profileBuildArgs assembles the `build` argv for a profile image. Pure (no
