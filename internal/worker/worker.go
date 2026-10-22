@@ -86,9 +86,10 @@ type Worker struct {
 	OnFindingCreated func(scan *db.Scan, finding *db.Finding)
 	// OnRevalidateVerdict, when non-nil, is called after parseRevalidateOutput
 	// applies a verdict to a finding. The web layer wires it up to enqueue a
-	// critic and verify for every true positive. severity is the
-	// post-adjustment severity: revalidate may have rated the finding lower
-	// than the original claim.
+	// critic for every true positive and verify for High/Critical true
+	// positives. severity is the post-adjustment severity: revalidate may have
+	// rated the finding lower than the original claim, and downstream gates use
+	// the revised value.
 	OnRevalidateVerdict func(scan *db.Scan, finding *db.Finding, verdict, severity string)
 	// OnScanFinalized, when non-nil, is called once after a scan finishes its
 	// analysis with findings committed and the worker has no further writes

@@ -99,8 +99,8 @@ func TestAutoChainRevalidate_truePositiveAlwaysQueuesCritic(t *testing.T) {
 	}
 	var verifyCount int64
 	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).Count(&verifyCount)
-	if verifyCount != 1 {
-		t.Fatalf("Medium finding queued %d verify scans, want 1 (every true positive is verified)", verifyCount)
+	if verifyCount != 0 {
+		t.Fatalf("Medium finding queued %d verify scans, want 0", verifyCount)
 	}
 }
 
