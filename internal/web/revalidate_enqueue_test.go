@@ -3,6 +3,7 @@ package web
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"scrutineer/internal/db"
 )
@@ -111,22 +112,99 @@ func TestAutoEnqueueRevalidate_doesNotDoubleQueueConcurrently(t *testing.T) {
 	}
 }
 
-// TestAutoChainVerify_queuesCriticButNeverVerify: revalidate confirming a
-// High finding queues the critic and nothing else — verify runs only on
-// request (2026-10-22).
-func TestAutoChainVerify_queuesCriticButNeverVerify(t *testing.T) {
+func patchChainSetup(t *testing.T) (*Server, func(), db.Skill, *db.Finding) {
+	t.Helper()
+	s, done, _, newFinding := chainTestSetup(t)
+	patch := db.Skill{Name: "patch", OutputFile: "report.json", OutputKind: "patch", Version: 1, Active: true}
+	s.DB.Create(&patch)
+	return s, done, patch, newFinding("High")
+}
+
+func queuedPatches(s *Server, f *db.Finding, patch db.Skill) int64 {
+	var n int64
+	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ? AND status = ?",
+		f.ID, patch.ID, db.ScanQueued).Count(&n)
+	return n
+}
+
+func TestAutoChainPatch_confirmedEnqueuesPatchOnce(t *testing.T) {
+	withCutoff(t, time.Now().Add(-time.Hour))
+	s, done, patch, f := patchChainSetup(t)
+	defer done()
+	verify := db.Scan{RepositoryID: f.RepositoryID, Status: db.ScanDone, SkillName: "verify", Profile: "java"}
+	s.DB.Create(&verify)
+
+	s.autoChainPatchAfterVerify(&verify, f, "confirmed")
+	s.autoChainPatchAfterVerify(&verify, f, "confirmed") // a re-verify must not stack a second
+
+	if n := queuedPatches(s, f, patch); n != 1 {
+		t.Fatalf("queued patch scans = %d, want 1", n)
+	}
+	var derived db.Scan
+	s.DB.Where("finding_id = ? AND skill_id = ?", f.ID, patch.ID).First(&derived)
+	if derived.Profile != "java" {
+		t.Errorf("patch Profile = %q, want %q (carried from verify)", derived.Profile, "java")
+	}
+}
+
+func TestAutoChainPatch_skipsUnconfirmedRefScopedAndAlreadyPatched(t *testing.T) {
+	withCutoff(t, time.Now().Add(-time.Hour))
+	s, done, patch, f := patchChainSetup(t)
+	defer done()
+
+	for _, status := range []string{"fixed", "inconclusive", "deferred", "not_attempted"} {
+		s.autoChainPatchAfterVerify(nil, f, status)
+	}
+	fixRef := db.Scan{RepositoryID: f.RepositoryID, Status: db.ScanDone, SkillName: "verify", Ref: "fix-branch"}
+	s.DB.Create(&fixRef)
+	s.autoChainPatchAfterVerify(&fixRef, f, "confirmed")
+	if n := queuedPatches(s, f, patch); n != 0 {
+		t.Fatalf("queued patch scans = %d, want 0", n)
+	}
+
+	s.DB.Model(&db.Finding{}).Where("id = ?", f.ID).Update("suggested_fix", "diff --git a/x b/x\n")
+	s.autoChainPatchAfterVerify(nil, f, "confirmed")
+	if n := queuedPatches(s, f, patch); n != 0 {
+		t.Errorf("finding with a gated patch got %d new patch scans, want 0", n)
+	}
+}
+
+// withCutoff pins autoChainCutoff for one test: findings created "now" by the
+// fixtures fall after it, and one stamped before it is an old finding.
+func withCutoff(t *testing.T, at time.Time) {
+	t.Helper()
+	prev := autoChainCutoff
+	autoChainCutoff = at
+	t.Cleanup(func() { autoChainCutoff = prev })
+}
+
+func TestAutoChain_newFindingGetsVerifyOldOneDoesNot(t *testing.T) {
+	withCutoff(t, time.Now().Add(-time.Hour))
 	s, done, verify, newFinding := chainTestSetup(t)
 	defer done()
-	critic := db.Skill{Name: criticSkillName, OutputFile: "report.json", OutputKind: "critic", Version: 1, Active: true}
-	s.DB.Create(&critic)
-	f := newFinding("Critical")
+	fresh := newFinding("Medium")
+	old := newFinding("Critical")
+	s.DB.Model(&db.Finding{}).Where("id = ?", old.ID).Update("created_at", time.Now().Add(-48*time.Hour))
+	old.CreatedAt = time.Time{} // make the chain read it from the database
 
-	s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "Critical")
+	s.autoChainVerifyAfterRevalidate(nil, fresh, "true_positive", "Medium")
+	s.autoChainVerifyAfterRevalidate(nil, old, "true_positive", "Critical")
 
-	var verifies, critics int64
-	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).Count(&verifies)
-	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ?", f.ID, critic.ID).Count(&critics)
-	if verifies != 0 || critics != 1 {
-		t.Fatalf("verify scans = %d, critic scans = %d; want 0 and 1", verifies, critics)
+	count := func(f *db.Finding) (n int64) {
+		s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).Count(&n)
+		return
+	}
+	if count(fresh) != 1 || count(old) != 0 {
+		t.Fatalf("verify scans: new finding %d, old finding %d; want 1 and 0", count(fresh), count(old))
+	}
+}
+
+func TestAutoChainPatch_oldFindingIsLeftToClients(t *testing.T) {
+	withCutoff(t, time.Now().Add(time.Hour)) // everything existing is old
+	s, done, patch, f := patchChainSetup(t)
+	defer done()
+	s.autoChainPatchAfterVerify(nil, f, "confirmed")
+	if n := queuedPatches(s, f, patch); n != 0 {
+		t.Fatalf("old finding got %d patch scans, want 0", n)
 	}
 }

@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"scrutineer/internal/db"
 )
@@ -17,7 +19,8 @@ const revalidateSkillName = "revalidate"
 const criticSkillName = "critic"
 
 // verifySkillName is shared with server.go: the heavier reproduction-running
-// checker, run on request (no longer chained after revalidate).
+// checker, chained after revalidate for findings from new scans
+// (autoChainCutoff) and run on request for the rest.
 
 // autoEnqueueRevalidate is wired onto Worker.OnFindingCreated. The worker
 // calls it after persisting each fresh Finding row from a findings-emitting
@@ -92,14 +95,36 @@ func (s *Server) hasOpenScan(scope string, args ...any) bool {
 	return n > 0
 }
 
+// autoChainCutoff divides the findings Scrutineer verifies and patches on its
+// own from those it leaves to a client. A finding created from this moment —
+// what new scans produce — gets revalidate → verify → (confirmed) patch
+// automatically; an older one gets neither, and L1 Helper asks for them when
+// it needs them (2026-10-22: "automatically run the verify / patch after the
+// finding is confirmed on new scans, leave the old scans … to l1-helper").
+// A fixed instant rather than the process start, so a restart does not move
+// it, and no catch-up pass ever works through the backlog.
+var autoChainCutoff = time.Date(2026, 10, 22, 12, 45, 0, 0, time.UTC)
+
+// newEnoughToChain reports whether a finding falls on the automatic side of
+// autoChainCutoff, reading its creation time from the database when the
+// caller's copy does not carry it.
+func (s *Server) newEnoughToChain(f *db.Finding) bool {
+	created := f.CreatedAt
+	if created.IsZero() {
+		var row db.Finding
+		if err := s.DB.Select("id, created_at").First(&row, f.ID).Error; err != nil {
+			return false
+		}
+		created = row.CreatedAt
+	}
+	return !created.Before(autoChainCutoff)
+}
+
 // autoChainVerifyAfterRevalidate is wired onto Worker.OnRevalidateVerdict.
-// Every true positive gets the static release-viability critic. Verify is no
-// longer chained here: it runs only when someone asks (the finding's Verify
-// button, the repository's verify-all, a client such as L1 Helper). Chained
-// automatically it queued a verify for every High/Critical confirmation, at a
-// reproduction's cost each, ahead of the instance's own deep dives
-// (2026-10-22: "remove the auto patch / verify runs"). The name is kept for
-// the hook it is wired to.
+// Every true positive gets the static release-viability critic; one from a
+// new scan (autoChainCutoff) gets verify too, whatever severity revalidate
+// left it at — verify confirming it then chains the patch
+// (autoChainPatchAfterVerify). Older findings are verified on request only.
 //
 // Errors are logged and swallowed; failing to chain must not roll back the
 // revalidate verdict.
@@ -119,7 +144,11 @@ func (s *Server) autoChainVerifyAfterRevalidate(scan *db.Scan, f *db.Finding, ve
 	if scan != nil {
 		profile = scan.Profile
 	}
-	s.enqueueCriticForFinding(context.Background(), f, profile)
+	ctx := context.Background()
+	s.enqueueCriticForFinding(ctx, f, profile)
+	if s.newEnoughToChain(f) {
+		s.enqueueVerifyForFinding(ctx, f, profile)
+	}
 }
 
 // enqueueCriticForFinding looks up the active critic skill and enqueues one
@@ -133,5 +162,58 @@ func (s *Server) enqueueCriticForFinding(ctx context.Context, f *db.Finding, pro
 	if err := s.enqueueFindingScopedSkillIfIdle(ctx, f.RepositoryID, f.ID, skill.ID, ScanOpts{Profile: profile}); err != nil {
 		s.Log.Warn("auto-chain critic after revalidate",
 			"finding", f.ID, "repo", f.RepositoryID, "skill", criticSkillName, "err", err)
+	}
+}
+
+// enqueueVerifyForFinding looks up the active verify skill and enqueues a
+// finding-scoped run, with the same absent-skill, already-queued, and
+// log-but-do-not-fail behaviour as the revalidate enqueue. profile carries
+// the parent scan's resolved runner profile; empty means detect fresh.
+func (s *Server) enqueueVerifyForFinding(ctx context.Context, f *db.Finding, profile string) {
+	var skill db.Skill
+	if err := s.DB.Where("name = ? AND active = ?", verifySkillName, true).First(&skill).Error; err != nil {
+		return
+	}
+	if err := s.enqueueFindingScopedSkillIfIdle(ctx, f.RepositoryID, f.ID, skill.ID, ScanOpts{Profile: profile}); err != nil {
+		s.Log.Warn("auto-chain verify after revalidate",
+			"finding", f.ID, "repo", f.RepositoryID, "skill", verifySkillName, "err", err)
+	}
+}
+
+// autoChainPatchAfterVerify is wired onto Worker.OnVerifyResult. A finding
+// from a new scan (autoChainCutoff) that verify confirmed on the default
+// branch gets a patch proposal, so a report
+// filed for it can carry Scrutineer's fix. Only then: verify against an
+// explicit ref is the validate-fix flow re-checking a candidate fix, and a
+// finding that already holds a gated patch does not need another. The
+// patch's own open-scan guard (enqueueFindingScopedSkillIfIdle) keeps a
+// re-verify from stacking a second one.
+//
+// Errors are logged and swallowed; failing to chain must not roll back the
+// verify result.
+func (s *Server) autoChainPatchAfterVerify(scan *db.Scan, f *db.Finding, status string) {
+	if f == nil || status != "confirmed" || !s.newEnoughToChain(f) {
+		return
+	}
+	if scan != nil && scan.Ref != "" {
+		return
+	}
+	var current db.Finding
+	if err := s.DB.Select("id, suggested_fix").First(&current, f.ID).Error; err == nil &&
+		strings.TrimSpace(current.SuggestedFix) != "" {
+		return
+	}
+	var skill db.Skill
+	if err := s.DB.Where("name = ? AND active = ?", patchSkillName, true).First(&skill).Error; err != nil {
+		return
+	}
+	var profile string
+	if scan != nil {
+		profile = scan.Profile
+	}
+	if err := s.enqueueFindingScopedSkillIfIdle(context.Background(), f.RepositoryID, f.ID, skill.ID,
+		ScanOpts{Profile: profile}); err != nil {
+		s.Log.Warn("auto-chain patch after verify",
+			"finding", f.ID, "repo", f.RepositoryID, "skill", patchSkillName, "err", err)
 	}
 }

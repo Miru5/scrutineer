@@ -1084,6 +1084,9 @@ func (w *Worker) parseVerifyOutput(scan *db.Scan, report string, emit func(Event
 	}
 
 	emit(Event{Kind: KindText, Text: "finding " + fmt.Sprint(f.ID) + " -> " + result.Status})
+	if w.OnVerifyResult != nil && gradingError == "" {
+		w.OnVerifyResult(scan, &f, result.Status)
+	}
 	return nil
 }
 
