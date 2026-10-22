@@ -35,50 +35,6 @@ func TestAutoEnqueueRevalidate_carriesParentProfile(t *testing.T) {
 	}
 }
 
-// TestAutoChainVerify_carriesRevalidateProfile locks #548: the auto-chained
-// verify scan inherits the revalidate scan's resolved profile so it reproduces
-// on the same image (an ASan crash needs the ruby-ext interpreter, not a
-// re-detected guess) and skips a redundant DetectProfile container spawn.
-func TestAutoChainVerify_carriesRevalidateProfile(t *testing.T) {
-	s, done, verify, newFinding := chainTestSetup(t)
-	defer done()
-	f := newFinding("High")
-	// The revalidate scan whose verdict is being applied; its own profile was
-	// resolved (auto-detected or itself carried from the deep-dive parent) and
-	// persisted before OnRevalidateVerdict fires.
-	parent := db.Scan{RepositoryID: f.RepositoryID, Status: db.ScanDone, SkillName: "revalidate", Profile: "ruby-ext"}
-	s.DB.Create(&parent)
-
-	s.autoChainVerifyAfterRevalidate(&parent, f, "true_positive", "High")
-
-	var derived db.Scan
-	if err := s.DB.Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).First(&derived).Error; err != nil {
-		t.Fatalf("derived verify scan not enqueued: %v", err)
-	}
-	if derived.Profile != "ruby-ext" {
-		t.Errorf("derived Profile = %q, want %q (carried from revalidate)", derived.Profile, "ruby-ext")
-	}
-}
-
-// TestAutoChainVerify_nilScanDetectsFresh locks the nil-safe read: a nil scan
-// (never happens in production but the callback is a public seam) still chains
-// verify with an empty profile — detect fresh — rather than panicking.
-func TestAutoChainVerify_nilScanDetectsFresh(t *testing.T) {
-	s, done, verify, newFinding := chainTestSetup(t)
-	defer done()
-	f := newFinding("High")
-
-	s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "High")
-
-	var derived db.Scan
-	if err := s.DB.Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).First(&derived).Error; err != nil {
-		t.Fatalf("derived verify scan not enqueued: %v", err)
-	}
-	if derived.Profile != "" {
-		t.Errorf("derived Profile = %q, want empty (detect fresh)", derived.Profile)
-	}
-}
-
 func TestAutoChainRevalidate_truePositiveAlwaysQueuesCritic(t *testing.T) {
 	s, done, verify, newFinding := chainTestSetup(t)
 	defer done()
@@ -120,34 +76,6 @@ func TestAutoChainRevalidate_nonTruePositiveQueuesNeitherAssessment(t *testing.T
 	}
 }
 
-func TestAutoChainVerify_doesNotDoubleQueueConcurrently(t *testing.T) {
-	s, done, verify, newFinding := chainTestSetup(t)
-	defer done()
-	f := newFinding("High")
-
-	const callers = 16
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	for range callers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start
-			s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "High")
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	var queued int64
-	s.DB.Model(&db.Scan{}).
-		Where("finding_id = ? AND skill_id = ? AND status = ?", f.ID, verify.ID, db.ScanQueued).
-		Count(&queued)
-	if queued != 1 {
-		t.Fatalf("queued verify scans = %d, want 1", queued)
-	}
-}
-
 func TestAutoEnqueueRevalidate_doesNotDoubleQueueConcurrently(t *testing.T) {
 	s, done := newTestServer(t)
 	defer done()
@@ -180,5 +108,25 @@ func TestAutoEnqueueRevalidate_doesNotDoubleQueueConcurrently(t *testing.T) {
 		Count(&queued)
 	if queued != 1 {
 		t.Fatalf("queued revalidate scans = %d, want 1", queued)
+	}
+}
+
+// TestAutoChainVerify_queuesCriticButNeverVerify: revalidate confirming a
+// High finding queues the critic and nothing else — verify runs only on
+// request (2026-10-22).
+func TestAutoChainVerify_queuesCriticButNeverVerify(t *testing.T) {
+	s, done, verify, newFinding := chainTestSetup(t)
+	defer done()
+	critic := db.Skill{Name: criticSkillName, OutputFile: "report.json", OutputKind: "critic", Version: 1, Active: true}
+	s.DB.Create(&critic)
+	f := newFinding("Critical")
+
+	s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "Critical")
+
+	var verifies, critics int64
+	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).Count(&verifies)
+	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ?", f.ID, critic.ID).Count(&critics)
+	if verifies != 0 || critics != 1 {
+		t.Fatalf("verify scans = %d, critic scans = %d; want 0 and 1", verifies, critics)
 	}
 }

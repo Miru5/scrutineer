@@ -599,21 +599,6 @@ func chainTestSetup(t *testing.T) (*Server, func(), db.Skill, func(string) *db.F
 	return s, done, verify, newFinding
 }
 
-func TestAutoChainVerify_truePositiveHighEnqueuesVerify(t *testing.T) {
-	s, done, verify, newFinding := chainTestSetup(t)
-	defer done()
-	f := newFinding("High")
-	s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "High")
-
-	var queued int64
-	s.DB.Model(&db.Scan{}).
-		Where("finding_id = ? AND skill_id = ? AND status = ?", f.ID, verify.ID, db.ScanQueued).
-		Count(&queued)
-	if queued != 1 {
-		t.Errorf("queued verify scans = %d, want 1", queued)
-	}
-}
-
 func TestAutoChainVerify_respectsAdjustedSeverity(t *testing.T) {
 	s, done, verify, newFinding := chainTestSetup(t)
 	defer done()
@@ -646,20 +631,6 @@ func TestAutoChainVerify_skipsNonTruePositive(t *testing.T) {
 				t.Errorf("queued = %d, want 0 for verdict %q", queued, verdict)
 			}
 		})
-	}
-}
-
-func TestAutoChainVerify_doesNotDoubleQueue(t *testing.T) {
-	s, done, verify, newFinding := chainTestSetup(t)
-	defer done()
-	f := newFinding("High")
-	s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "High")
-	s.autoChainVerifyAfterRevalidate(nil, f, "true_positive", "High")
-
-	var queued int64
-	s.DB.Model(&db.Scan{}).Where("finding_id = ? AND skill_id = ?", f.ID, verify.ID).Count(&queued)
-	if queued != 1 {
-		t.Errorf("queued = %d, want 1 (re-chain guard)", queued)
 	}
 }
 
